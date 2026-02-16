@@ -10,7 +10,7 @@ import { corsOrigins, env } from "./env";
 const app = new Elysia()
   .use(
     cors({
-      origin: ({ request }) => {
+      origin: (request) => {
         const origin = request.headers.get("origin") ?? "";
         const allowed = corsOrigins.includes(origin);
         if (!allowed && origin) {
