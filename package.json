@@ -1,0 +1,30 @@
+{
+  "name": "collab-canvas-monorepo",
+  "private": true,
+  "packageManager": "bun@latest",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "bun run --env-file=.env --filter @collab/backend dev & bun run --env-file=.env --filter @collab/frontend dev",
+    "dev:backend": "bun run --env-file=.env --filter @collab/backend dev",
+    "dev:frontend": "bun run --env-file=.env --filter @collab/frontend dev",
+    "typecheck": "bun run --workspaces typecheck",
+    "perf:ws": "bun run --filter @collab/backend perf:ws",
+    "perf:ws:ci": "bun run --filter @collab/backend perf:ws:ci",
+    "perf:frontend": "bun run --filter @collab/frontend test:perf:e2e",
+    "perf:frontend:ci": "bun run --filter @collab/frontend test:perf:e2e:ci",
+    "perf:check": "bun scripts/perf-check.ts",
+    "perf:trend": "bun scripts/perf-trend.ts",
+    "perf:ci": "bun run perf:ws:ci && bun run perf:frontend:ci && bun run perf:check",
+    "db:up": "docker compose up -d --force-recreate postgres",
+    "db:recreate": "docker compose down && docker compose up -d --force-recreate postgres",
+    "db:down": "docker compose down",
+    "db:logs": "docker compose logs -f postgres",
+    "migrate": "bun run --env-file=.env --filter @collab/backend migrate"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  }
+}

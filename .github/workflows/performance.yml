@@ -1,0 +1,74 @@
+name: Performance
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  performance:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: collab
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d collab"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Prepare env file
+        run: |
+          cat <<'EOF' > .env
+          DATABASE_URL=postgres://postgres:postgres@localhost:5432/collab
+          BETTER_AUTH_SECRET=ci_secret_with_at_least_32_characters_long
+          BETTER_AUTH_URL=http://localhost:3000
+          CORS_ORIGIN=http://localhost:5173
+          NEXT_PUBLIC_API_URL=http://localhost:3000
+          POSTGRES_DB=collab
+          POSTGRES_USER=postgres
+          POSTGRES_PASSWORD=postgres
+          POSTGRES_PORT=5432
+          NEXT_PUBLIC_ENABLE_PERF_PROBES=1
+          EOF
+
+      - name: Run migrations
+        run: bun run migrate
+
+      - name: Install Playwright browser
+        run: bunx playwright install --with-deps chromium
+        working-directory: apps/frontend
+
+      - name: Run websocket benchmark
+        run: bun run perf:ws:ci
+
+      - name: Run frontend performance tests
+        run: bun run perf:frontend:ci
+
+      - name: Verify performance budgets
+        run: bun run perf:check
+
+      - name: Compute trend summary
+        run: bun run perf:trend
+
+      - name: Upload performance artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-artifacts
+          path: artifacts/perf

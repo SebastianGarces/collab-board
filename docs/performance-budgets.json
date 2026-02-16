@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "environments": {
+    "ci": {
+      "minSampleCount": 100,
+      "fpsSampleWindowMs": 5000
+    },
+    "local": {
+      "minSampleCount": 50,
+      "fpsSampleWindowMs": 3000
+    }
+  },
+  "thresholds": {
+    "cursorSyncLatencyMs": {
+      "p95Max": 50,
+      "p99Max": 75
+    },
+    "objectSyncLatencyMs": {
+      "p95Max": 100,
+      "p99Max": 150
+    },
+    "canvasFps": {
+      "avgMin": 60
+    },
+    "objectCapacity": {
+      "min": 500
+    },
+    "concurrentUsers": {
+      "min": 5
+    },
+    "canvasLongFramesPerMinute": {
+      "max": 120
+    }
+  }
+}

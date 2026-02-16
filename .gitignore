@@ -1,0 +1,13 @@
+node_modules
+.env
+.env.local
+dist
+.next
+.DS_Store
+coverage
+*.log
+# Keep drizzle migration files committed for deployment
+artifacts/perf
+apps/frontend/test-results
+apps/frontend/playwright-report
+

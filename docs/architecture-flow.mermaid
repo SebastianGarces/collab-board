@@ -1,0 +1,48 @@
+sequenceDiagram
+    participant UserA as User_A_Browser
+    participant UserB as User_B_Browser
+    participant WS as WebSocket_Handler
+    participant RM as Room_Manager
+    participant DB as PostgreSQL
+
+    Note over RM,DB: Room Load
+    RM->>DB: Load Yjs snapshot for roomId
+    DB-->>RM: Binary state (or empty)
+    RM->>RM: Apply state to Y.Doc
+
+    Note over UserA,WS: User A Joins
+    UserA->>WS: Connect /ws/collab/roomId
+    WS->>RM: joinRoom(roomId, socketA)
+    RM-->>UserA: Sync Step 1 (full state)
+
+    Note over UserA,RM: User A Creates Sticky Note
+    UserA->>UserA: Click canvas with sticky-note tool
+    UserA->>UserA: Insert into local Y.Doc elements map
+    UserA->>WS: Yjs update (binary)
+    WS->>RM: Apply update to server Y.Doc
+    RM->>UserB: Broadcast update
+    UserB->>UserB: Apply update, re-render
+
+    Note over UserA,RM: User A Moves Element
+    UserA->>UserA: Drag element (Konva draggable)
+    UserA->>UserA: Update x,y in Y.Doc on dragEnd
+    UserA->>WS: Yjs update (binary)
+    WS->>RM: Apply update to server Y.Doc
+    RM->>UserB: Broadcast update
+    UserB->>UserB: Apply update, element moves
+
+    Note over UserA,UserB: Real-time Cursors
+    UserA->>UserA: Move mouse on canvas
+    UserA->>UserA: Update presence Y.Map with cursor coords
+    UserA->>WS: Yjs update (presence)
+    WS->>RM: Apply to server Y.Doc
+    RM->>UserB: Broadcast update
+    UserB->>UserB: Render remote cursor
+
+    Note over RM,DB: Periodic Persistence
+    RM->>RM: Every 30s timer fires
+    RM->>DB: Save Y.encodeStateAsUpdate()
+
+    Note over RM,DB: Last User Disconnects
+    RM->>DB: Save final Y.Doc state
+    RM->>RM: Dispose room from memory

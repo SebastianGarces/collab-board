@@ -1,0 +1,34 @@
+{
+  "name": "@collab/backend",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun --env-file=../../.env --watch src/index.ts",
+    "start": "bun --env-file=../../.env src/index.ts",
+    "typecheck": "bunx tsc --noEmit",
+    "perf:ws": "bun --env-file=../../.env src/collab/ws-benchmark.ts",
+    "perf:ws:ci": "bun --env-file=../../.env src/collab/ws-benchmark.ts --mode=ci",
+    "perf:users:seed": "bun --env-file=../../.env src/auth/perf-users-seed.ts",
+    "perf:users:cleanup": "bun --env-file=../../.env src/auth/perf-users-cleanup.ts",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate",
+    "migrate": "bun run db:generate && bun run db:migrate"
+  },
+  "dependencies": {
+    "@collab/shared": "workspace:*",
+    "@elysiajs/cors": "latest",
+    "better-auth": "latest",
+    "drizzle-orm": "latest",
+    "elysia": "latest",
+    "lib0": "0.2.117",
+    "pg": "latest",
+    "y-protocols": "latest",
+    "yjs": "latest",
+    "zod": "latest"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/pg": "latest",
+    "drizzle-kit": "latest"
+  }
+}
