@@ -10,9 +10,16 @@ import { corsOrigins, env } from "./env";
 const app = new Elysia()
   .use(
     cors({
-      origin: corsOrigins,
+      origin: ({ request }) => {
+        const origin = request.headers.get("origin") ?? "";
+        const allowed = corsOrigins.includes(origin);
+        if (!allowed && origin) {
+          console.log(`[cors] blocked origin: "${origin}" (allowed: ${JSON.stringify(corsOrigins)})`);
+        }
+        return allowed;
+      },
       credentials: true,
-      allowedHeaders: ["Content-Type", "Authorization"],
+      allowedHeaders: ["Content-Type", "Authorization", "Cookie"],
       methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
     })
   )
