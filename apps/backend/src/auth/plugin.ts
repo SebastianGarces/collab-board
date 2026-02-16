@@ -3,7 +3,9 @@ import { Elysia } from "elysia";
 import { auth } from "./auth";
 
 export const betterAuthPlugin = new Elysia({ name: "better-auth" })
-  .mount(auth.handler)
+  .all("/api/auth/*", async ({ request }) => {
+    return auth.handler(request);
+  })
   .macro({
     auth: {
       async resolve({ request, status }) {
