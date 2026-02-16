@@ -32,6 +32,7 @@ COPY --from=base /app/apps/frontend/.next/static ./apps/frontend/.next/static
 COPY --from=base /app/apps/frontend/public ./apps/frontend/public
 
 ENV PORT=5173
+ENV HOSTNAME=0.0.0.0
 EXPOSE 5173
 
 CMD ["bun", "apps/frontend/server.js"]
