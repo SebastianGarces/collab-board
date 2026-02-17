@@ -69,6 +69,7 @@ export default function CanvasPage() {
     "connecting" | "connected" | "disconnected"
   >("connecting");
   const [isPanning, setIsPanning] = useState(false);
+  const [isSpacebarPressed, setIsSpacebarPressed] = useState(false);
   const [syntheticObjectCount, setSyntheticObjectCount] = useState(0);
   const [activeTool, setActiveTool] = useState<ActiveTool>("pointer");
   const [selectedElementId, setSelectedElementId] = useState<string | null>(null);
@@ -85,7 +86,9 @@ export default function CanvasPage() {
   const drawingRectangleRef = useRef<DrawingRectangleState | null>(null);
 
   const perfEnabled =
-    process.env.NEXT_PUBLIC_ENABLE_PERF_PROBES === "1" || process.env.NODE_ENV === "test";
+    process.env.NEXT_PUBLIC_ENABLE_PERF_PROBES === "1" ||
+    process.env.NODE_ENV === "test" ||
+    process.env.NODE_ENV === "development";
 
   const currentUser = useMemo(() => {
     if (!session?.user) return null;
@@ -331,6 +334,7 @@ export default function CanvasPage() {
         if (!editingElementId) {
           e.preventDefault();
           isSpacebarPressedRef.current = true;
+          setIsSpacebarPressed(true);
         }
         return;
       }
@@ -365,6 +369,7 @@ export default function CanvasPage() {
     const handleKeyUp = (e: KeyboardEvent) => {
       if (e.key === " ") {
         isSpacebarPressedRef.current = false;
+        setIsSpacebarPressed(false);
       }
     };
 
@@ -525,8 +530,10 @@ export default function CanvasPage() {
     ? {
         left: editingElement.x * camera.scale + camera.x,
         top: editingElement.y * camera.scale + camera.y,
-        width: editingElement.width * camera.scale,
-        height: editingElement.height * camera.scale,
+        width: editingElement.width,
+        height: editingElement.height,
+        transform: `scale(${camera.scale})`,
+        transformOrigin: "top left" as const,
       }
     : null;
 
@@ -562,6 +569,7 @@ export default function CanvasPage() {
       <section
         ref={surfaceRef}
         className="relative overflow-hidden bg-[#121212] touch-none"
+        style={{ cursor: isPanning ? "grabbing" : isSpacebarPressed ? "grab" : undefined }}
         onPointerDown={onSectionPointerDown}
         onPointerMove={onSectionPointerMove}
         onPointerUp={onSectionPointerUp}
@@ -589,6 +597,9 @@ export default function CanvasPage() {
           onDragElement={moveElement}
           onResizeElement={resizeElement}
           onDblClickElement={startEditing}
+          onStagePointerDown={() => {
+            setSelectedElementId(null);
+          }}
           onStagePointerMove={(worldX, worldY) => {
             connectionRef.current?.setCursor({ x: worldX, y: worldY });
           }}
@@ -638,9 +649,12 @@ export default function CanvasPage() {
                 }
                 e.stopPropagation();
               }}
-              className="w-full h-full resize-none border-2 border-[#60a5fa] rounded bg-transparent text-[#1a1a1a] p-3 text-sm font-[system-ui] outline-none"
+              className="w-full h-full resize-none border-none ring-2 ring-[#60a5fa] rounded bg-transparent text-[#1a1a1a] outline-none"
               style={{
-                fontSize: `${14 * camera.scale}px`,
+                fontFamily: "system-ui, sans-serif",
+                fontSize: 14,
+                lineHeight: 1,
+                padding: 12,
                 background: editingElement.type === "sticky-note" ? editingElement.color : "transparent",
               }}
             />

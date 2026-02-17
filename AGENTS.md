@@ -23,6 +23,15 @@ When making code changes, run performance checks incrementally for the area you 
 - Cross-cutting changes touching both frontend and backend realtime paths:
   - Run `bun run perf:ws:ci`, then `bun run perf:frontend:ci`, then `bun run perf:check`
 
+## Build Checklist Maintenance
+
+The file `docs/build-checklist.md` tracks what has been implemented and what remains against the project spec. Keep it up to date:
+
+- After completing a feature or task, mark the corresponding checklist item(s) as `[x] Done` and update the **Notes** column if relevant.
+- If a partially-done item (`[~]`) becomes fully complete, change it to `[x] Done`.
+- If new work is discovered or scope changes, add it to the appropriate table and dependency layer.
+- Do **not** remove items from the checklist — only update their status.
+
 ## Required Behavior
 
 - Prefer running the smallest relevant perf command after each meaningful batch of edits.

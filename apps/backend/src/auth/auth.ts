@@ -5,6 +5,8 @@ import { db } from "../db/client";
 import { schema } from "../db/schema";
 import { corsOrigins, env } from "../env";
 
+const isProduction = process.env.NODE_ENV === "production";
+
 export const auth = betterAuth({
   baseURL: env.BETTER_AUTH_URL,
   secret: env.BETTER_AUTH_SECRET,
@@ -18,11 +20,11 @@ export const auth = betterAuth({
   }),
   advanced: {
     crossSubDomainCookies: {
-      enabled: true,
+      enabled: isProduction,
       domain: ".gsgarces.dev"
     },
     defaultCookieAttributes: {
-      secure: true,
+      secure: isProduction,
       sameSite: "lax"
     }
   }

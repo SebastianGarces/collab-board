@@ -5,8 +5,9 @@ import { Layer, Rect, Stage } from "react-konva";
 
 import type { BoardElement } from "@collab/shared/collab";
 
+import { InteractiveShape } from "./interactive-shape";
 import { StickyNote } from "./sticky-note";
-import { RectangleShape } from "./rectangle-element";
+import { RectangleContent } from "./rectangle-element";
 import type { ElementBox } from "./shape-transform";
 
 type BoardCanvasProps = {
@@ -90,11 +91,9 @@ export function BoardCanvas({
             if (!isPointerMode) return;
             const stage = e.target.getStage();
             if (!stage) return;
-            const pos = stage.getPointerPosition();
-            if (!pos) return;
-            const worldX = (pos.x - camera.x) / camera.scale;
-            const worldY = (pos.y - camera.y) / camera.scale;
-            onStagePointerDown?.(worldX, worldY);
+            if (e.target === stage) {
+              onStagePointerDown?.(0, 0);
+            }
           }}
           onPointerMove={(e) => {
             if (!isPointerMode) return;
@@ -133,34 +132,24 @@ export function BoardCanvas({
 
             {/* Real board elements */}
             {elements.map((el) => {
-              if (el.type === "sticky-note") {
-                return (
-                  <StickyNote
-                    key={el.id}
-                    element={el}
-                    isSelected={selectedElementId === el.id}
-                    onSelect={handleSelect}
-                    onDragEnd={handleDragEnd}
-                    onDblClick={handleDblClick}
-                    draggable={draggable}
-                  />
-                );
-              }
-              if (el.type === "rectangle") {
-                return (
-                  <RectangleShape
-                    key={el.id}
-                    element={el}
-                    isSelected={selectedElementId === el.id}
-                    onSelect={handleSelect}
-                    onDragEnd={handleDragEnd}
-                    onResize={handleResize}
-                    draggable={draggable}
-                    zoomScale={camera.scale}
-                  />
-                );
-              }
-              return null;
+              const resizable = el.type !== "sticky-note";
+              return (
+                <InteractiveShape
+                  key={el.id}
+                  element={el}
+                  isSelected={selectedElementId === el.id}
+                  draggable={draggable}
+                  onSelect={handleSelect}
+                  onDragEnd={handleDragEnd}
+                  resizable={resizable}
+                  onResize={resizable ? handleResize : undefined}
+                  zoomScale={camera.scale}
+                  onDblClick={el.type === "sticky-note" ? handleDblClick : undefined}
+                >
+                  {el.type === "sticky-note" && <StickyNote element={el} />}
+                  {el.type === "rectangle" && <RectangleContent element={el} />}
+                </InteractiveShape>
+              );
             })}
           </Layer>
         </Stage>
