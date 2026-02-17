@@ -1,5 +1,33 @@
 # Agent Instructions
 
+## Immutable Rules
+
+These rules are never violated. If a plan or implementation breaks one, stop and flag it.
+
+1. **Auth before everything.** All HTTP routes require Better Auth session validation. WebSocket upgrade must validate auth token. No unauthenticated access.
+2. **Yjs doc is the single source of truth for board content.** PostgreSQL stores metadata and snapshots only. Never read/write board element state directly to PostgreSQL.
+3. **AI mutations flow through the server.** AI commands arrive via WebSocket, execute server-side against the Yjs doc, and sync to all clients. The client never applies AI mutations directly.
+4. **Performance budgets are not optional.** If a change causes a perf regression, fix it before merging. The budgets in `docs/performance-budgets.json` are enforced in CI.
+
+## Current Milestone
+
+**Phase:** Core features + AI Agent
+**Next goal:** See dependency graph in `docs/build-checklist.md`
+**Tracker:** `docs/build-checklist.md`
+
+## Memory Protocol
+
+**Before starting work:** Read `docs/memory/INDEX.md` to find relevant context from previous sessions.
+
+**During work:** If you discover something valuable (a pattern, a gotcha, a decision), note it for the user to add or update the memory files directly.
+
+**After completing a feature:**
+1. Update `docs/memory/INDEX.md` with any new entries
+2. Update `docs/memory/decisions.md` if architectural choices were made
+3. Update `docs/memory/known-issues.md` if bugs or workarounds were found
+4. Update `docs/conventions.md` if new patterns were established
+5. Update `docs/build-checklist.md` to mark completed items
+
 ## Local Environment Assumptions
 
 The developer always has the backend, frontend, and database running locally. **Do NOT** attempt to:

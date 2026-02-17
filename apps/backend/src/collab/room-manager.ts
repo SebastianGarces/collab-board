@@ -22,6 +22,8 @@ type Room = {
   socketPresenceKeys: Map<SocketLike, Set<string>>;
   /** Whether the initial DB state has been loaded. */
   loaded: boolean;
+  /** Whether the room has been disposed (prevents stale async callbacks). */
+  disposed: boolean;
   /** Queue of messages received before the room finished loading. */
   pendingMessages: Array<{ socket: SocketLike; raw: unknown }>;
   /** Handle for the periodic save timer. */
@@ -110,6 +112,7 @@ export class RoomManager {
 
   private async saveRoom(room: Room) {
     if (!this.persistence) return;
+    if (!room.loaded || room.disposed) return;
     try {
       const state = Y.encodeStateAsUpdate(room.doc);
       await this.persistence.saveState(room.id, state);
@@ -176,9 +179,11 @@ export class RoomManager {
       clients,
       socketPresenceKeys,
       loaded: !this.persistence,
+      disposed: false,
       pendingMessages: [],
       saveTimer,
       dispose: () => {
+        room.disposed = true;
         if (saveTimer) clearInterval(saveTimer);
         presence.unobserve(onPresenceChange);
         doc.off("update", onUpdate);
@@ -190,6 +195,7 @@ export class RoomManager {
 
     if (this.persistence) {
       this.persistence.loadState(roomId).then((state) => {
+        if (room.disposed) return;
         if (state && state.length > 0) {
           Y.applyUpdate(doc, state);
         }
@@ -212,6 +218,7 @@ export class RoomManager {
           client.send(payload);
         }
       }).catch((error) => {
+        if (room.disposed) return;
         console.error(`[collab] failed to load room ${roomId}:`, error);
         room.loaded = true;
         for (const pending of room.pendingMessages) {

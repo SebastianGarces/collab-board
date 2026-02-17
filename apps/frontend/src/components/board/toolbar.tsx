@@ -1,10 +1,10 @@
 "use client";
 
-import { MousePointer2, StickyNote, Square, Trash2 } from "lucide-react";
+import { Circle, Minus, MousePointer2, Square, StickyNote, Trash2, Type } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 
-export type ActiveTool = "pointer" | "sticky-note" | "rectangle";
+export type ActiveTool = "pointer" | "sticky-note" | "rectangle" | "circle" | "line" | "text";
 
 type ToolbarProps = {
   activeTool: ActiveTool;
@@ -17,6 +17,9 @@ const tools: { id: ActiveTool; icon: typeof MousePointer2; label: string }[] = [
   { id: "pointer", icon: MousePointer2, label: "Select" },
   { id: "sticky-note", icon: StickyNote, label: "Sticky Note" },
   { id: "rectangle", icon: Square, label: "Rectangle" },
+  { id: "circle", icon: Circle, label: "Circle" },
+  { id: "line", icon: Minus, label: "Line" },
+  { id: "text", icon: Type, label: "Text" },
 ];
 
 export function Toolbar({ activeTool, onToolChange, onDelete, hasSelection }: ToolbarProps) {

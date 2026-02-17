@@ -26,8 +26,8 @@ export function StickyNote({ element }: StickyNoteProps) {
         width={element.width - 24}
         height={element.height - 24}
         text={element.text}
-        fontSize={14}
-        fontFamily="system-ui, sans-serif"
+        fontSize={element.fontSize}
+        fontFamily={element.fontFamily}
         fill="#1a1a1a"
         wrap="word"
         ellipsis

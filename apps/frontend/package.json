@@ -9,8 +9,8 @@
     "typecheck": "bunx tsc --noEmit",
     "perf:users:seed": "bun run --filter @collab/backend perf:users:seed",
     "perf:users:cleanup": "bun run --filter @collab/backend perf:users:cleanup",
-    "test:perf:e2e": "bun run perf:users:seed && (bunx playwright test --config=playwright.config.ts perf-tests/performance.spec.ts; EXIT_CODE=$?; bun run perf:users:cleanup; exit $EXIT_CODE)",
-    "test:perf:e2e:ci": "bun run perf:users:seed && (bunx playwright test --reporter=line --config=playwright.config.ts perf-tests/performance.spec.ts; EXIT_CODE=$?; bun run perf:users:cleanup; exit $EXIT_CODE)"
+    "test:perf:e2e": "PLAYWRIGHT_BROWSERS_PATH=.playwright-browsers bunx playwright install chromium && bun run perf:users:seed && (PLAYWRIGHT_BROWSERS_PATH=.playwright-browsers bunx playwright test --config=playwright.config.ts perf-tests/performance.spec.ts; EXIT_CODE=$?; bun run perf:users:cleanup; exit $EXIT_CODE)",
+    "test:perf:e2e:ci": "PLAYWRIGHT_BROWSERS_PATH=.playwright-browsers bunx playwright install chromium && bun run perf:users:seed && (PLAYWRIGHT_BROWSERS_PATH=.playwright-browsers bunx playwright test --reporter=line --config=playwright.config.ts perf-tests/performance.spec.ts; EXIT_CODE=$?; bun run perf:users:cleanup; exit $EXIT_CODE)"
   },
   "dependencies": {
     "@collab/shared": "workspace:*",
@@ -27,7 +27,8 @@
     "react-konva": "^19.2.2",
     "tailwind-merge": "^3.4.1",
     "y-protocols": "latest",
-    "yjs": "latest"
+    "yjs": "latest",
+    "zustand": "^5.0.11"
   },
   "devDependencies": {
     "@playwright/test": "^1.58.2",

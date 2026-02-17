@@ -10,4 +10,5 @@ coverage
 artifacts/perf
 apps/frontend/test-results
 apps/frontend/playwright-report
+apps/frontend/.playwright-browsers
 

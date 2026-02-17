@@ -1,6 +1,6 @@
 # CollabBoard Build Checklist
 
-**Last updated**: February 16, 2026
+**Last updated**: February 17, 2026
 
 This checklist tracks what has been implemented against the full spec in `collab-board.md`, informed by the architecture decisions in `pre-search.md`. Items are organized by dependency layer so you can work top-to-bottom without getting blocked.
 
@@ -74,19 +74,19 @@ Layer 4 (final — depends on everything above)
 | # | Feature | Status | Notes |
 |---|---------|--------|-------|
 | 1 | Workspace (infinite pan/zoom) | [x] Done | Min 0.2x, max 3x zoom, dot grid background |
-| 2 | Sticky notes (create, edit, colors) | [~] Partial | Create + edit done. Random color on create, but **no UI to change color** after creation |
+| 2 | Sticky notes (create, edit, colors) | [x] Done | Color picker, font family/size, resizable. Selection toolbar with composable controls |
 | 3 | Shapes — Rectangle | [x] Done | Drag-to-draw, resize handles, fill/stroke |
-| 4 | Shapes — Circle | [ ] Not done | Not in `ElementType` union or toolbar |
-| 5 | Shapes — Line | [ ] Not done | Not in `ElementType` union or toolbar |
+| 4 | Shapes — Circle | [x] Done | Ellipse via Konva, drag-to-draw, resize handles, fill/stroke |
+| 5 | Shapes — Line | [x] Done | Line via Konva, drag-to-draw, configurable stroke |
 | 6 | Connectors (lines/arrows between objects) | [ ] Not done | No connector type, no endpoint snapping logic |
-| 7 | Standalone text elements | [ ] Not done | Only sticky note text exists |
+| 7 | Standalone text elements | [x] Done | Text element with double-click inline editing, configurable font size |
 | 8 | Frames (group + organize areas) | [ ] Not done | No frame type, no child containment logic |
 | 9 | Transforms — Move | [x] Done | Drag via Konva + Yjs transact |
 | 10 | Transforms — Resize | [x] Done | 8-point handles, min size enforcement |
 | 11 | Transforms — Rotate | [ ] Not done | No rotation property or UI |
 | 12 | Selection — Single select | [x] Done | Click to select, blue highlight ring |
-| 13 | Selection — Multi-select (shift-click) | [ ] Not done | No multi-selection state |
-| 14 | Selection — Drag-to-select (marquee) | [ ] Not done | No rubber-band selection |
+| 13 | Selection — Multi-select (shift-click) | [x] Done | Shift-click toggles elements in/out of selection set |
+| 14 | Selection — Drag-to-select (marquee) | [x] Done | Drag on empty canvas draws selection rectangle, selects intersecting elements |
 | 15 | Operations — Delete | [x] Done | Delete/Backspace key, toolbar trash button |
 | 16 | Operations — Duplicate | [ ] Not done | No duplicate logic |
 | 17 | Operations — Copy/paste | [ ] Not done | No clipboard integration |
@@ -101,7 +101,7 @@ Layer 4 (final — depends on everything above)
 | 2 | Object sync (instant for all users) | [x] Done | Yjs shared types, binary WebSocket sync |
 | 3 | Presence (who's currently online) | [x] Done | Peer count in header bar |
 | 4 | Conflict handling (LWW via Yjs) | [x] Done | Yjs CRDT handles merges automatically |
-| 5 | Resilience (disconnect/reconnect) | [ ] Not done | No retry/backoff in `collab.ts`, connection just dies |
+| 5 | Resilience (disconnect/reconnect) | [x] Done | Exponential backoff (1s-30s) with jitter, same Y.Doc across reconnects, "reconnecting" UI state |
 | 6 | Persistence (board survives reload) | [x] Done | Yjs state serialized to PostgreSQL every 30s |
 
 ---
@@ -145,13 +145,13 @@ Layer 4 (final — depends on everything above)
 
 | # | Feature | Status | Notes |
 |---|---------|--------|-------|
-| 1 | WebSocket auth (validate session on upgrade) | [ ] Not done | Noted as TODO in `ws.ts` — frontend guards only |
+| 1 | WebSocket auth (validate session on upgrade) | [x] Done | Session validated in WS `open` handler via `auth.api.getSession()`, closes with 4401 if unauthorized |
 | 2 | Input validation / XSS sanitization | [ ] Not done | Raw text stored in Yjs, not sanitized |
 | 3 | CORS configuration | [x] Done | Configured in Elysia server |
 | 4 | HTTPS/WSS in production | [x] Done | Railway provides TLS, app deployed |
 | 5 | Database schema + migrations | [x] Done | Drizzle ORM, 2 migrations applied |
-| 6 | Board CRUD API | [~] Partial | List + create done. **No delete, rename, or ownership enforcement** |
-| 7 | Dashboard page (board management UI) | [ ] Not done | No `/dashboard` route, root redirects to `/canvas/main` |
+| 6 | Board CRUD API | [x] Done | List, create, rename (PATCH), delete with ownership enforcement |
+| 7 | Dashboard page (board management UI) | [x] Done | `/dashboard` with board grid, create dialog, rename dialog, delete confirmation |
 | 8 | Performance benchmarking (WS) | [x] Done | `ws-benchmark.ts`, JSONL artifact output |
 | 9 | Performance benchmarking (frontend) | [x] Done | Playwright perf spec, FPS/latency collection |
 | 10 | Performance budget enforcement | [x] Done | `perf-check.ts` validates against `performance-budgets.json` |

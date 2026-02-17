@@ -52,14 +52,14 @@ async function signIn(page: Page, creds: { email: string; password: string }) {
 
   try {
     await Promise.race([
-      page.waitForURL("**/canvas/**", { timeout: 15_000 }),
+      page.waitForURL("**/dashboard**", { timeout: 15_000 }),
       signInError.waitFor({ state: "visible", timeout: 15_000 }).then(() => {
         throw new Error(`Unable to sign in seeded user ${creds.email}`);
       })
     ]);
   } catch {
     const currentURL = page.url();
-    throw new Error(`Sign-in did not reach canvas for ${creds.email}. Current URL: ${currentURL}`);
+    throw new Error(`Sign-in did not reach dashboard for ${creds.email}. Current URL: ${currentURL}`);
   }
 }
 

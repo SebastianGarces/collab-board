@@ -1,10 +1,10 @@
 import { cors } from "@elysiajs/cors";
 import { Elysia } from "elysia";
 
-import { betterAuthPlugin } from "./auth/plugin";
 import { auth } from "./auth/auth";
-import { collabWsPlugin } from "./collab/ws";
+import { betterAuthPlugin } from "./auth/plugin";
 import { boardRoutes } from "./boards/routes";
+import { collabWsPlugin } from "./collab/ws";
 import { corsOrigins, env } from "./env";
 
 const app = new Elysia()
@@ -13,7 +13,7 @@ const app = new Elysia()
       origin: corsOrigins,
       credentials: true,
       allowedHeaders: ["Content-Type", "Authorization", "Cookie"],
-      methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
+      methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
     })
   )
   .use(betterAuthPlugin)

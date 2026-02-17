@@ -1,5 +1,6 @@
 import { Elysia } from "elysia";
 
+import { auth } from "../auth/auth";
 import { RoomManager, type SocketLike } from "./room-manager";
 import { drizzlePersistence } from "./persistence";
 import { COLLAB_WS_PATH } from "./protocol";
@@ -15,7 +16,6 @@ const collabMetricsInterval = setInterval(() => {
     })
   );
 }, METRICS_LOG_INTERVAL_MS);
-// Bun/Node should not keep process alive only for periodic metrics.
 collabMetricsInterval.unref?.();
 
 function getRoomId(ws: any): string {
@@ -28,19 +28,29 @@ function getRoomId(ws: any): string {
  * Instead we create the SocketLike once in `open` and stash it on
  * `ws.data` which IS stable across all handlers for the same connection.
  */
-function getSocket(ws: any): SocketLike {
+function getSocket(ws: any): SocketLike | undefined {
   return ws.data._socket;
 }
 
-// NOTE: WS auth is not enforced server-side because Elysia's async
-// beforeHandle returns a truthy Promise that silently skips WS handlers.
-// The frontend guards canvas access via Better Auth session checks.
-// TODO: add server-side WS auth once Elysia supports sync beforeHandle
-// or by validating cookies inside the open handler.
-
 export const collabWsPlugin = new Elysia({ name: "collab-ws" })
   .ws(COLLAB_WS_PATH, {
-    open(ws) {
+    async open(ws) {
+      (ws.data as any)._pendingMessages = [];
+
+      const headers = (ws.data as any).request?.headers as Headers | undefined;
+      if (!headers) {
+        (ws.data as any)._pendingMessages = null;
+        ws.close(4401, "Unauthorized");
+        return;
+      }
+
+      const session = await auth.api.getSession({ headers });
+      if (!session) {
+        (ws.data as any)._pendingMessages = null;
+        ws.close(4401, "Unauthorized");
+        return;
+      }
+
       const socket: SocketLike = {
         send(data: Uint8Array) {
           try {
@@ -52,12 +62,33 @@ export const collabWsPlugin = new Elysia({ name: "collab-ws" })
       };
       (ws.data as any)._socket = socket;
       roomManager.connect(getRoomId(ws), socket);
+
+      // Replay messages that arrived while awaiting auth
+      const pending = (ws.data as any)._pendingMessages as unknown[] | null;
+      (ws.data as any)._pendingMessages = null;
+      if (pending) {
+        for (const msg of pending) {
+          roomManager.handleMessage(getRoomId(ws), socket, msg);
+        }
+      }
     },
     message(ws, message) {
-      roomManager.handleMessage(getRoomId(ws), getSocket(ws), message);
+      const socket = getSocket(ws);
+      if (!socket) {
+        // Auth still in progress — buffer the message for replay after connect
+        const pending = (ws.data as any)._pendingMessages as unknown[] | null;
+        if (pending) {
+          pending.push(message);
+        }
+        return;
+      }
+      roomManager.handleMessage(getRoomId(ws), socket, message);
     },
     close(ws) {
-      roomManager.disconnect(getRoomId(ws), getSocket(ws));
+      (ws.data as any)._pendingMessages = null;
+      const socket = getSocket(ws);
+      if (!socket) return;
+      roomManager.disconnect(getRoomId(ws), socket);
     }
   })
   .get("/api/collab/debug", () => ({

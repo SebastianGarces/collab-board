@@ -4,6 +4,7 @@ import { type ReactNode, useRef, useState } from "react";
 import { Group, Rect } from "react-konva";
 
 import type { BaseElement } from "@collab/shared/collab";
+import { useCanvasStore } from "@/stores/canvas-store";
 import { ShapeResizeHandles } from "./shape-resize-handles";
 import type { ElementBox, ResizeHandle, ResizeSession } from "./shape-transform";
 import { resizeBoxFromHandle } from "./shape-transform";
@@ -11,32 +12,60 @@ import { resizeBoxFromHandle } from "./shape-transform";
 type InteractiveShapeProps = {
   element: BaseElement;
   isSelected: boolean;
+  multiSelected: boolean;
   draggable: boolean;
-  onSelect: (id: string) => void;
+  onSelect: (id: string, shiftKey: boolean) => void;
+  onDragStart?: (id: string) => void;
   onDragEnd: (id: string, x: number, y: number) => void;
   resizable?: boolean;
   onResize?: (id: string, box: ElementBox) => void;
   zoomScale?: number;
   onDblClick?: (id: string) => void;
+  hideSelectionOutline?: boolean;
   children: ReactNode;
 };
 
 export function InteractiveShape({
   element,
   isSelected,
+  multiSelected,
   draggable,
   onSelect,
+  onDragStart,
   onDragEnd,
   resizable = false,
   onResize,
   zoomScale = 1,
   onDblClick,
+  hideSelectionOutline = false,
   children,
 }: InteractiveShapeProps) {
   const resizeSessionRef = useRef<ResizeSession | null>(null);
   const [isResizing, setIsResizing] = useState(false);
 
+  const startGroupDrag = useCanvasStore((s) => s.startGroupDrag);
+  const updateGroupDrag = useCanvasStore((s) => s.updateGroupDrag);
+  const endGroupDrag = useCanvasStore((s) => s.endGroupDrag);
+
+  const groupDragDx = useCanvasStore((s) =>
+    s.groupDrag &&
+    s.groupDrag.draggedId !== element.id &&
+    s.selectedElementIds.has(element.id)
+      ? s.groupDrag.dx
+      : 0
+  );
+  const groupDragDy = useCanvasStore((s) =>
+    s.groupDrag &&
+    s.groupDrag.draggedId !== element.id &&
+    s.selectedElementIds.has(element.id)
+      ? s.groupDrag.dy
+      : 0
+  );
+
   const effectiveDraggable = draggable && !isResizing;
+
+  const renderX = element.x + groupDragDx;
+  const renderY = element.y + groupDragDy;
 
   const beginResize = (handle: ResizeHandle, pointer: { x: number; y: number }) => {
     resizeSessionRef.current = {
@@ -66,16 +95,40 @@ export function InteractiveShape({
     setIsResizing(false);
   };
 
+  const showSingleSelectionOutline =
+    isSelected && !multiSelected && !resizable && !hideSelectionOutline;
+  const showResizeHandles = isSelected && !multiSelected && resizable;
+
   return (
     <Group
-      x={element.x}
-      y={element.y}
+      x={renderX}
+      y={renderY}
       draggable={effectiveDraggable}
-      onClick={() => onSelect(element.id)}
-      onTap={() => onSelect(element.id)}
+      onClick={(e) => {
+        const shiftKey = e.evt?.shiftKey ?? false;
+        onSelect(element.id, shiftKey);
+      }}
+      onTap={() => onSelect(element.id, false)}
       onDblClick={onDblClick ? () => onDblClick(element.id) : undefined}
       onDblTap={onDblClick ? () => onDblClick(element.id) : undefined}
+      onDragStart={(e) => {
+        startGroupDrag(element.id, e.target.x(), e.target.y());
+        onDragStart?.(element.id);
+      }}
+      onDragMove={(e) => {
+        const groupDrag = useCanvasStore.getState().groupDrag;
+        if (groupDrag && groupDrag.draggedId === element.id) {
+          const dx = e.target.x() - groupDrag.startX;
+          const dy = e.target.y() - groupDrag.startY;
+          updateGroupDrag(dx, dy);
+        }
+      }}
       onDragEnd={(e) => {
+        const delta = endGroupDrag();
+        if (delta) {
+          e.target.x(element.x + delta.dx);
+          e.target.y(element.y + delta.dy);
+        }
         onDragEnd(element.id, e.target.x(), e.target.y());
       }}
       onMouseEnter={(e) => {
@@ -90,7 +143,7 @@ export function InteractiveShape({
       }}
     >
       {children}
-      {isSelected && resizable && (
+      {showResizeHandles && (
         <ShapeResizeHandles
           box={{ x: 0, y: 0, width: element.width, height: element.height }}
           zoomScale={zoomScale}
@@ -99,7 +152,7 @@ export function InteractiveShape({
           onResizeEnd={finishResize}
         />
       )}
-      {isSelected && !resizable && (
+      {showSingleSelectionOutline && (
         <Rect
           x={-3}
           y={-3}

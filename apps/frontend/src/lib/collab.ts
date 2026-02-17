@@ -18,6 +18,12 @@ export type Camera = {
   scale: number;
 };
 
+export type ConnectionState = "connecting" | "connected" | "reconnecting" | "disconnected";
+
+const RECONNECT_BASE_MS = 1000;
+const RECONNECT_MAX_MS = 30_000;
+const RECONNECT_JITTER = 0.3;
+
 function toWebSocketURL(roomId: string) {
   const apiURL = new URL(process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3000");
   apiURL.protocol = apiURL.protocol === "https:" ? "wss:" : "ws:";
@@ -25,21 +31,29 @@ function toWebSocketURL(roomId: string) {
   return apiURL.toString();
 }
 
+function backoffDelay(attempt: number): number {
+  const base = Math.min(RECONNECT_BASE_MS * 2 ** attempt, RECONNECT_MAX_MS);
+  const jitter = base * RECONNECT_JITTER * (Math.random() * 2 - 1);
+  return Math.max(0, base + jitter);
+}
+
 export function createCollabConnection(args: {
   roomId: string;
   user: PresenceUser;
   onStatesChange: (states: Map<number, PresenceState>, localClientId: number) => void;
-  onConnectionStateChange?: (state: "connecting" | "connected" | "disconnected") => void;
+  onConnectionStateChange?: (state: ConnectionState) => void;
   onPerfProbe?: (probe: PerfProbeMessage & { latencyMs: number }) => void;
 }) {
   const doc = new Y.Doc();
   const presence = doc.getMap<PresenceState>("presence");
-  const ws = new WebSocket(toWebSocketURL(args.roomId));
-  ws.binaryType = "arraybuffer";
-  args.onConnectionStateChange?.("connecting");
+
+  let ws: WebSocket | null = null;
+  let disposed = false;
+  let reconnectAttempt = 0;
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
   const send = (payload: Uint8Array) => {
-    if (ws.readyState === WebSocket.OPEN) {
+    if (ws?.readyState === WebSocket.OPEN) {
       ws.send(payload);
     }
   };
@@ -52,7 +66,7 @@ export function createCollabConnection(args: {
   };
 
   const handleDocUpdate = (update: Uint8Array, origin: unknown) => {
-    if (origin === ws) return; // skip updates that came from the server
+    if (origin === ws) return;
     const encoder = encoding.createEncoder();
     encoding.writeVarUint(encoder, WS_MESSAGE_SYNC);
     syncProtocol.writeUpdate(encoder, update);
@@ -79,49 +93,84 @@ export function createCollabConnection(args: {
     });
   };
 
-  ws.onopen = () => {
-    args.onConnectionStateChange?.("connected");
-    sendSyncStep1();
-    publishPresence(null);
+  const scheduleReconnect = () => {
+    if (disposed) return;
+    const delay = backoffDelay(reconnectAttempt);
+    reconnectAttempt++;
+    args.onConnectionStateChange?.("reconnecting");
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null;
+      if (!disposed) connectWs();
+    }, delay);
   };
 
-  ws.onmessage = (event) => {
-    const raw = event.data;
-    if (!(raw instanceof ArrayBuffer)) return; // binaryType is arraybuffer
+  function connectWs() {
+    if (disposed) return;
+    const socket = new WebSocket(toWebSocketURL(args.roomId));
+    socket.binaryType = "arraybuffer";
+    ws = socket;
 
-    const data = new Uint8Array(raw);
-    const decoder = decoding.createDecoder(data);
-    const encoder = encoding.createEncoder();
-    const messageType = decoding.readVarUint(decoder);
+    args.onConnectionStateChange?.(reconnectAttempt === 0 ? "connecting" : "reconnecting");
 
-    if (messageType === WS_MESSAGE_SYNC) {
-      encoding.writeVarUint(encoder, WS_MESSAGE_SYNC);
-      syncProtocol.readSyncMessage(decoder, encoder, doc, ws);
-      const reply = encoding.toUint8Array(encoder);
-      if (reply.length > 1) {
-        send(reply);
+    socket.onopen = () => {
+      if (disposed || ws !== socket) {
+        socket.close();
+        return;
       }
-    } else if (messageType === WS_MESSAGE_PERF_PROBE) {
-      try {
-        const rawPayload = decoding.readVarString(decoder);
-        const payload = JSON.parse(rawPayload) as PerfProbeMessage;
-        args.onPerfProbe?.({
-          ...payload,
-          latencyMs: Math.max(0, performance.now() - payload.sentAtMs)
-        });
-      } catch {
-        // ignore invalid perf probes
+      reconnectAttempt = 0;
+      args.onConnectionStateChange?.("connected");
+      sendSyncStep1();
+      publishPresence(null);
+    };
+
+    socket.onmessage = (event) => {
+      if (ws !== socket) return;
+      const raw = event.data;
+      if (!(raw instanceof ArrayBuffer)) return;
+
+      const data = new Uint8Array(raw);
+      const decoder = decoding.createDecoder(data);
+      const encoder = encoding.createEncoder();
+      const messageType = decoding.readVarUint(decoder);
+
+      if (messageType === WS_MESSAGE_SYNC) {
+        encoding.writeVarUint(encoder, WS_MESSAGE_SYNC);
+        syncProtocol.readSyncMessage(decoder, encoder, doc, socket);
+        const reply = encoding.toUint8Array(encoder);
+        if (reply.length > 1) {
+          send(reply);
+        }
+      } else if (messageType === WS_MESSAGE_PERF_PROBE) {
+        try {
+          const rawPayload = decoding.readVarString(decoder);
+          const payload = JSON.parse(rawPayload) as PerfProbeMessage;
+          args.onPerfProbe?.({
+            ...payload,
+            latencyMs: Math.max(0, performance.now() - payload.sentAtMs)
+          });
+        } catch {
+          // ignore invalid perf probes
+        }
       }
-    }
-  };
+    };
 
-  ws.onclose = () => {
-    args.onConnectionStateChange?.("disconnected");
-  };
+    socket.onclose = () => {
+      if (ws !== socket) return;
+      ws = null;
+      if (!disposed) {
+        scheduleReconnect();
+      } else {
+        args.onConnectionStateChange?.("disconnected");
+      }
+    };
 
-  ws.onerror = () => {
-    args.onConnectionStateChange?.("disconnected");
-  };
+    socket.onerror = () => {
+      if (ws !== socket) return;
+      // onclose will fire after onerror, which triggers reconnect
+    };
+  }
+
+  connectWs();
 
   const setCursor = (cursor: { x: number; y: number } | null) => {
     publishPresence(cursor);
@@ -142,11 +191,20 @@ export function createCollabConnection(args: {
   };
 
   const disconnect = () => {
+    disposed = true;
+    if (reconnectTimer !== null) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
     presence.delete(String(doc.clientID));
-    ws.close();
+    if (ws) {
+      ws.close();
+      ws = null;
+    }
     doc.off("update", handleDocUpdate);
     presence.unobserve(emitStates);
     doc.destroy();
+    args.onConnectionStateChange?.("disconnected");
   };
 
   return { doc, disconnect, setCursor, sendPerfProbe };

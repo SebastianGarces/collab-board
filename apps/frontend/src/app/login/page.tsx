@@ -20,7 +20,7 @@ export default function LoginPage() {
 
   useEffect(() => {
     if (!isPending && session?.user) {
-      router.replace("/canvas/main");
+      router.replace("/dashboard");
     }
   }, [isPending, session, router]);
 
