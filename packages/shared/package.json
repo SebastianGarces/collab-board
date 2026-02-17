@@ -5,10 +5,14 @@
   "exports": {
     ".": "./src/index.ts",
     "./collab": "./src/collab.ts",
-    "./auth": "./src/auth.ts"
+    "./auth": "./src/auth.ts",
+    "./validation": "./src/validation.ts"
   },
   "scripts": {
     "typecheck": "bunx tsc --noEmit"
+  },
+  "dependencies": {
+    "@sinclair/typebox": "^0.34.48"
   },
   "devDependencies": {}
 }

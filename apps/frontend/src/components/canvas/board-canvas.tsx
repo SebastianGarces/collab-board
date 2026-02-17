@@ -5,6 +5,7 @@ import { Layer, Rect, Stage } from "react-konva";
 
 import type { BoardElement } from "@collab/shared/collab";
 
+import { getElementAABB } from "@/lib/element-utils";
 import { useCanvasStore } from "@/stores/canvas-store";
 import { InteractiveShape } from "./interactive-shape";
 import { StickyNote } from "./sticky-note";
@@ -14,6 +15,8 @@ import { LineContent } from "./line-element";
 import { LineEndpointHandles } from "./line-endpoint-handles";
 import { TextContent } from "./text-element";
 import type { ElementBox } from "./shape-transform";
+
+import type { RotationCursorState } from "./interactive-shape";
 
 type BoardCanvasProps = {
   camera: { x: number; y: number; scale: number };
@@ -25,6 +28,8 @@ type BoardCanvasProps = {
   onDragElement?: (id: string, x: number, y: number) => void;
   onDragSelectedElements?: (deltaX: number, deltaY: number) => void;
   onResizeElement?: (id: string, box: ElementBox) => void;
+  onRotateElement?: (id: string, rotation: number) => void;
+  onRotateCursorChange?: (state: RotationCursorState) => void;
   onDblClickElement?: (id: string) => void;
   onLineEndpointDrag?: (id: string, endpointIndex: number, worldX: number, worldY: number) => void;
   onLineEndpointDragEnd?: (id: string, endpointIndex: number, worldX: number, worldY: number) => void;
@@ -45,6 +50,8 @@ export function BoardCanvas({
   onDragElement,
   onDragSelectedElements,
   onResizeElement,
+  onRotateElement,
+  onRotateCursorChange,
   onDblClickElement,
   onLineEndpointDrag,
   onLineEndpointDragEnd,
@@ -84,10 +91,18 @@ export function BoardCanvas({
     const offsetX = groupDrag?.dx ?? 0;
     const offsetY = groupDrag?.dy ?? 0;
 
-    const minX = Math.min(...selectedEls.map((e) => e.x + offsetX));
-    const minY = Math.min(...selectedEls.map((e) => e.y + offsetY));
-    const maxX = Math.max(...selectedEls.map((e) => e.x + e.width + offsetX));
-    const maxY = Math.max(...selectedEls.map((e) => e.y + e.height + offsetY));
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+
+    for (const e of selectedEls) {
+      const aabb = getElementAABB(e);
+      minX = Math.min(minX, aabb.minX + offsetX);
+      minY = Math.min(minY, aabb.minY + offsetY);
+      maxX = Math.max(maxX, aabb.maxX + offsetX);
+      maxY = Math.max(maxY, aabb.maxY + offsetY);
+    }
 
     return { x: minX - 4, y: minY - 4, width: maxX - minX + 8, height: maxY - minY + 8 };
   }, [isMultiSelect, elements, selectedElementIds, groupDrag]);
@@ -113,6 +128,10 @@ export function BoardCanvas({
 
   const handleResize = (id: string, box: ElementBox) => {
     onResizeElement?.(id, box);
+  };
+
+  const handleRotate = (id: string, rotation: number) => {
+    onRotateElement?.(id, rotation);
   };
 
   const handleDblClick = (id: string) => {
@@ -195,6 +214,8 @@ export function BoardCanvas({
                   onDragEnd={handleMultiDragEnd}
                   resizable={resizable}
                   onResize={resizable ? handleResize : undefined}
+                  onRotate={resizable ? handleRotate : undefined}
+                  onRotateCursorChange={resizable ? onRotateCursorChange : undefined}
                   zoomScale={camera.scale}
                   onDblClick={editable ? handleDblClick : undefined}
                   hideSelectionOutline={isLine}

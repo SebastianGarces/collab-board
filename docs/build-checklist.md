@@ -83,13 +83,13 @@ Layer 4 (final — depends on everything above)
 | 8 | Frames (group + organize areas) | [ ] Not done | No frame type, no child containment logic |
 | 9 | Transforms — Move | [x] Done | Drag via Konva + Yjs transact |
 | 10 | Transforms — Resize | [x] Done | 8-point handles, min size enforcement |
-| 11 | Transforms — Rotate | [ ] Not done | No rotation property or UI |
+| 11 | Transforms — Rotate | [x] Done | Rotation zones outside corners, center-pivot, Shift-snap to 15°, custom cursor with Lucide icons |
 | 12 | Selection — Single select | [x] Done | Click to select, blue highlight ring |
 | 13 | Selection — Multi-select (shift-click) | [x] Done | Shift-click toggles elements in/out of selection set |
 | 14 | Selection — Drag-to-select (marquee) | [x] Done | Drag on empty canvas draws selection rectangle, selects intersecting elements |
 | 15 | Operations — Delete | [x] Done | Delete/Backspace key, toolbar trash button |
-| 16 | Operations — Duplicate | [ ] Not done | No duplicate logic |
-| 17 | Operations — Copy/paste | [ ] Not done | No clipboard integration |
+| 16 | Operations — Duplicate | [x] Done | Ctrl/Cmd+D, toolbar button, +20px offset |
+| 17 | Operations — Copy/paste | [x] Done | Ctrl/Cmd+C/V, clipboard API, viewport-centered paste, plain text creates sticky note |
 
 ---
 
@@ -146,7 +146,7 @@ Layer 4 (final — depends on everything above)
 | # | Feature | Status | Notes |
 |---|---------|--------|-------|
 | 1 | WebSocket auth (validate session on upgrade) | [x] Done | Session validated in WS `open` handler via `auth.api.getSession()`, closes with 4401 if unauthorized |
-| 2 | Input validation / XSS sanitization | [ ] Not done | Raw text stored in Yjs, not sanitized |
+| 2 | Input validation / XSS sanitization | [x] Done | TypeBox schemas in shared package, HTML tag stripping, length limits enforced on backend API (board CRUD) and frontend (presence, element text, board forms) |
 | 3 | CORS configuration | [x] Done | Configured in Elysia server |
 | 4 | HTTPS/WSS in production | [x] Done | Railway provides TLS, app deployed |
 | 5 | Database schema + migrations | [x] Done | Drizzle ORM, 2 migrations applied |

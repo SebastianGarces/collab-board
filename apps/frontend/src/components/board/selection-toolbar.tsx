@@ -70,8 +70,18 @@ export function SelectionToolbar({ element, onPropertyChange, camera }: Selectio
   const hasAnything = hasColor || hasFont || hasFontSize;
   if (!hasAnything) return null;
 
-  const toolbarLeft = element.x * camera.scale + camera.x + (element.width * camera.scale) / 2;
-  const toolbarTop = element.y * camera.scale + camera.y - 12;
+  // Compute the visual bounding box accounting for rotation
+  const rotation = (element.rotation ?? 0) * (Math.PI / 180);
+  const cx = element.x + element.width / 2;
+  const cy = element.y + element.height / 2;
+  const hw = element.width / 2;
+  const hh = element.height / 2;
+  const cosR = Math.abs(Math.cos(rotation));
+  const sinR = Math.abs(Math.sin(rotation));
+  const rotatedHalfHeight = hw * sinR + hh * cosR;
+
+  const toolbarLeft = cx * camera.scale + camera.x;
+  const toolbarTop = (cy - rotatedHalfHeight) * camera.scale + camera.y - 12;
 
   return (
     <div

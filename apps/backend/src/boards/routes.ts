@@ -4,6 +4,7 @@ import { Elysia } from "elysia";
 import { auth } from "../auth/auth";
 import { db } from "../db/client";
 import { board } from "../db/schema";
+import { CreateBoardBody, UpdateBoardBody, stripHtmlTags } from "@collab/shared/validation";
 
 export const boardRoutes = new Elysia({ name: "board-routes" })
   .get("/api/boards", async ({ request, status }) => {
@@ -32,18 +33,22 @@ export const boardRoutes = new Elysia({ name: "board-routes" })
       return status(401, { error: "Unauthorized" });
     }
 
-    const { name } = (body ?? {}) as { name?: string };
+    // Sanitize and use the name if provided, otherwise "Untitled"
+    const sanitizedName = body.name ? stripHtmlTags(body.name).trim() : "Untitled";
+    const finalName = sanitizedName || "Untitled";
     const id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 
     await db.insert(board).values({
       id,
-      name: name ?? "Untitled",
+      name: finalName,
       ownerId: session.user.id,
       createdAt: new Date(),
       updatedAt: new Date(),
     });
 
-    return { id, name: name ?? "Untitled" };
+    return { id, name: finalName };
+  }, {
+    body: CreateBoardBody
   })
   .delete("/api/boards/:id", async ({ request, params, status }) => {
     const session = await auth.api.getSession({ headers: request.headers });
@@ -74,11 +79,8 @@ export const boardRoutes = new Elysia({ name: "board-routes" })
       return status(401, { error: "Unauthorized" });
     }
 
-    const { name } = (body ?? {}) as { name?: string };
-    const trimmed = (name ?? "").trim();
-    if (!trimmed) {
-      return status(400, { error: "Name is required" });
-    }
+    // Sanitize and trim the name
+    const sanitizedName = stripHtmlTags(body.name).trim();
 
     const existing = await db
       .select({ id: board.id, ownerId: board.ownerId })
@@ -97,8 +99,10 @@ export const boardRoutes = new Elysia({ name: "board-routes" })
     const now = new Date();
     await db
       .update(board)
-      .set({ name: trimmed, updatedAt: now })
+      .set({ name: sanitizedName, updatedAt: now })
       .where(eq(board.id, params.id));
 
-    return { id: params.id, name: trimmed };
+    return { id: params.id, name: sanitizedName };
+  }, {
+    body: UpdateBoardBody
   });

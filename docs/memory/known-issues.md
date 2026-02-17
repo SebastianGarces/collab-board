@@ -28,8 +28,8 @@ Check here before investigating a problem -- it may already be documented.
 **Date found:** 2026-02-16
 **Symptom:** Raw text from sticky notes, text elements, and board names is stored directly in Yjs without sanitization. Malicious content could execute in other users' browsers.
 **Cause:** No sanitization layer between user input and Yjs document storage. Text is rendered as-is in Konva canvas and overlay UI.
-**Workaround:** None. Canvas rendering via Konva is somewhat safe (canvas text doesn't execute scripts), but overlay UI (React/DOM) could be vulnerable.
-**Status:** open
+**Fix:** TypeBox schemas in `packages/shared/src/validation.ts` enforce length limits (board names: 200 chars, element text: 5000 chars, user names: 100 chars). `stripHtmlTags()` utility removes HTML tags. Backend board CRUD routes validate via TypeBox, frontend sanitizes on presence name, commitEdit, and board forms. React JSX auto-escapes text nodes, providing defense against DOM-based XSS.
+**Status:** resolved (2026-02-17)
 
 ---
 

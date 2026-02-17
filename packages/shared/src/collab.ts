@@ -39,6 +39,7 @@ export interface BaseElement {
   y: number;
   width: number;
   height: number;
+  rotation?: number; // degrees, pivots around center
 }
 
 export interface StickyNoteElement extends BaseElement {

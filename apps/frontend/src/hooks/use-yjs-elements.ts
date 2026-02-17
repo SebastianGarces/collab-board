@@ -29,6 +29,7 @@ function yMapToElement(id: string, map: Y.Map<unknown>): BoardElement | null {
     y: toFiniteNumber(map.get("y"), 0),
     width: toSafeSize(map.get("width"), 200),
     height: toSafeSize(map.get("height"), 200),
+    rotation: toFiniteNumber(map.get("rotation"), 0),
   };
 
   if (type === "sticky-note") {

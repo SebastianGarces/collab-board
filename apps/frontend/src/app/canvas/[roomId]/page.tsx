@@ -2,12 +2,13 @@
 
 import type { PointerEvent as ReactPointerEvent, WheelEvent as ReactWheelEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useHotkey } from "@tanstack/react-hotkeys";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import dynamic from "next/dynamic";
 import * as Y from "yjs";
 
-import type { PresenceState } from "@collab/shared/collab";
+import type { PresenceState, BoardElement } from "@collab/shared/collab";
 import {
   DEFAULT_FONT_FAMILY,
   DEFAULT_STICKY_NOTE_FONT_SIZE,
@@ -15,6 +16,8 @@ import {
   DEFAULT_TEXT_SIZE,
   STICKY_NOTE_COLORS,
 } from "@collab/shared/collab";
+import { stripHtmlTags } from "@collab/shared/validation";
+import { cloneElementFromYjs, serializeElement, deserializeElement, getBoundingBox } from "@/lib/element-utils";
 import { authClient } from "@/lib/auth-client";
 import { type Camera, type ConnectionState, createCollabConnection } from "@/lib/collab";
 import { createPerfProbeCollector } from "@/lib/perf-probe";
@@ -30,6 +33,11 @@ import {
 
 const BoardCanvas = dynamic(
   () => import("@/components/canvas/board-canvas").then((m) => m.BoardCanvas),
+  { ssr: false }
+);
+
+const RotationCursor = dynamic(
+  () => import("@/components/canvas/rotation-cursor").then((m) => m.RotationCursor),
   { ssr: false }
 );
 
@@ -95,6 +103,8 @@ export default function CanvasPage() {
   const drawingShapeRef = useRef<DrawingShapeState | null>(null);
   const [marqueeRect, setMarqueeRect] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
   const marqueeStartRef = useRef<{ x: number; y: number } | null>(null);
+  const [rotationCursor, setRotationCursor] = useState<{ corner: "nw" | "ne" | "se" | "sw"; elementRotation: number } | null>(null);
+  const [pointerPosition, setPointerPosition] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
 
   const perfEnabled =
     process.env.NEXT_PUBLIC_ENABLE_PERF_PROBES === "1" ||
@@ -103,9 +113,12 @@ export default function CanvasPage() {
 
   const currentUser = useMemo(() => {
     if (!session?.user) return null;
+    const rawName = session.user.name ?? session.user.email ?? "Anonymous";
+    // Sanitize user name and truncate to max length
+    const sanitizedName = stripHtmlTags(rawName).slice(0, 100);
     return {
       id: session.user.id,
-      name: session.user.name ?? session.user.email ?? "Anonymous",
+      name: sanitizedName || "Anonymous",
       color: colorFromId(session.user.id)
     };
   }, [session?.user]);
@@ -395,6 +408,17 @@ export default function CanvasPage() {
     });
   }, []);
 
+  const rotateElement = useCallback((id: string, rotation: number) => {
+    const doc = docRef.current;
+    if (!doc) return;
+    const elementsMap = doc.getMap("elements");
+    const elementMap = elementsMap.get(id) as Y.Map<unknown> | undefined;
+    if (!elementMap) return;
+    doc.transact(() => {
+      elementMap.set("rotation", rotation);
+    });
+  }, []);
+
   const moveLineEndpoint = useCallback(
     (id: string, endpointIndex: number, worldX: number, worldY: number) => {
       const doc = docRef.current;
@@ -467,6 +491,122 @@ export default function CanvasPage() {
     clearSelection();
   }, [clearSelection]);
 
+  const duplicateSelectedElements = useCallback(() => {
+    const doc = docRef.current;
+    if (!doc) return;
+    const ids = useCanvasStore.getState().selectedElementIds;
+    if (ids.size === 0) return;
+    
+    const elementsMap = doc.getMap("elements");
+    const newIds: string[] = [];
+    const offset = { x: 20, y: 20 };
+    
+    doc.transact(() => {
+      for (const id of ids) {
+        const newId = generateId();
+        const clonedMap = cloneElementFromYjs(elementsMap, id, offset, newId);
+        if (clonedMap) {
+          elementsMap.set(newId, clonedMap);
+          newIds.push(newId);
+        }
+      }
+    });
+    
+    // Select the newly duplicated elements
+    setSelectedElementIds(new Set(newIds));
+  }, [setSelectedElementIds]);
+
+  const copySelectedElements = useCallback(() => {
+    const ids = useCanvasStore.getState().selectedElementIds;
+    if (ids.size === 0) return;
+    
+    const selectedElements = elements.filter((el) => ids.has(el.id));
+    if (selectedElements.length === 0) return;
+    
+    // Serialize elements to JSON
+    const clipboardData = {
+      collabboard: true,
+      elements: selectedElements.map(serializeElement),
+    };
+    
+    // Write to clipboard
+    navigator.clipboard.writeText(JSON.stringify(clipboardData)).catch((err) => {
+      console.error("Failed to copy to clipboard:", err);
+    });
+  }, [elements]);
+
+  const pasteElements = useCallback(() => {
+    const doc = docRef.current;
+    if (!doc) return;
+    
+    // Read from clipboard
+    navigator.clipboard.readText().then((text) => {
+      if (!text) return;
+      
+      try {
+        const data = JSON.parse(text);
+        
+        // If it's our format, paste elements
+        if (data.collabboard && Array.isArray(data.elements)) {
+          const elementsMap = doc.getMap("elements");
+          const newIds: string[] = [];
+          
+          // Calculate bounding box of copied elements
+          const bbox = getBoundingBox(data.elements as BoardElement[]);
+          if (!bbox) return;
+          
+          // Calculate offset to center of viewport
+          const surface = surfaceRef.current;
+          if (!surface) return;
+          const rect = surface.getBoundingClientRect();
+          const viewportCenterX = (rect.width / 2 - camera.x) / camera.scale;
+          const viewportCenterY = (rect.height / 2 - camera.y) / camera.scale;
+          const bboxCenterX = bbox.x + bbox.width / 2;
+          const bboxCenterY = bbox.y + bbox.height / 2;
+          const offset = {
+            x: viewportCenterX - bboxCenterX,
+            y: viewportCenterY - bboxCenterY,
+          };
+          
+          doc.transact(() => {
+            for (const elementData of data.elements) {
+              const newId = generateId();
+              const elementMap = deserializeElement(elementData, newId, offset);
+              elementsMap.set(newId, elementMap);
+              newIds.push(newId);
+            }
+          });
+          
+          // Select the pasted elements
+          setSelectedElementIds(new Set(newIds));
+        } else {
+          // If it's plain text, create a sticky note with that text
+          const viewportCenterX = (surfaceRef.current!.clientWidth / 2 - camera.x) / camera.scale;
+          const viewportCenterY = (surfaceRef.current!.clientHeight / 2 - camera.y) / camera.scale;
+          createStickyNote(viewportCenterX, viewportCenterY);
+          
+          // Set the text content
+          setTimeout(() => {
+            const ids = useCanvasStore.getState().selectedElementIds;
+            if (ids.size === 1) {
+              const [newId] = ids;
+              const elementsMap = doc.getMap("elements");
+              const elementMap = elementsMap.get(newId) as Y.Map<unknown> | undefined;
+              if (elementMap) {
+                const sanitizedText = stripHtmlTags(text).slice(0, 5000);
+                elementMap.set("text", sanitizedText);
+              }
+            }
+          }, 0);
+        }
+      } catch {
+        // Ignore invalid JSON
+      }
+    }).catch((err) => {
+      console.error("Failed to read from clipboard:", err);
+    });
+  }, [camera, elements, setSelectedElementIds, createStickyNote]);
+
   const updateElementProperty = useCallback((id: string, key: string, value: unknown) => {
     const doc = docRef.current;
     if (!doc) return;
@@ -500,7 +640,9 @@ export default function CanvasPage() {
     const elementsMap = doc.getMap("elements");
     const elementMap = elementsMap.get(editingElementId) as Y.Map<unknown> | undefined;
     if (elementMap) {
-      elementMap.set("text", editText);
+      // Sanitize and truncate text to max length (5000 chars)
+      const sanitizedText = stripHtmlTags(editText).slice(0, 5000);
+      elementMap.set("text", sanitizedText);
     }
     setEditingElementId(null);
     setEditText("");
@@ -513,69 +655,74 @@ export default function CanvasPage() {
     }
   }, [editingElementId]);
 
-  // Keyboard shortcuts
+  // Keyboard shortcuts via TanStack Hotkeys
+  // Tool shortcuts (single keys) -- won't fire when Mod/Ctrl is held
+  useHotkey("V", () => setActiveTool("pointer"), { enabled: !editingElementId });
+  useHotkey("S", () => setActiveTool("sticky-note"), { enabled: !editingElementId });
+  useHotkey("R", () => setActiveTool("rectangle"), { enabled: !editingElementId });
+  useHotkey("C", () => setActiveTool("circle"), { enabled: !editingElementId });
+  useHotkey("L", () => setActiveTool("line"), { enabled: !editingElementId });
+  useHotkey("T", () => setActiveTool("text"), { enabled: !editingElementId });
+
+  // Modifier combos
+  useHotkey("Mod+C", () => {
+    if (useCanvasStore.getState().selectedElementIds.size > 0) {
+      copySelectedElements();
+    }
+  });
+  useHotkey("Mod+V", () => {
+    pasteElements();
+  });
+  useHotkey("Mod+D", () => {
+    if (useCanvasStore.getState().selectedElementIds.size > 0) {
+      duplicateSelectedElements();
+    }
+  });
+
+  // Escape: commit edit if editing, otherwise clear selection and reset tool
+  useHotkey("Escape", () => {
+    if (editingElementId) {
+      commitEdit();
+    } else {
+      clearSelection();
+      setActiveTool("pointer");
+    }
+  }, { ignoreInputs: false });
+
+  // Delete/Backspace: delete selected elements
+  useHotkey("Delete", () => {
+    if (useCanvasStore.getState().selectedElementIds.size > 0) {
+      deleteSelectedElements();
+    }
+  }, { enabled: !editingElementId });
+  useHotkey("Backspace", () => {
+    if (useCanvasStore.getState().selectedElementIds.size > 0) {
+      deleteSelectedElements();
+    }
+  }, { enabled: !editingElementId });
+
+  // Spacebar pan (needs keydown + keyup tracking, kept as manual useEffect)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Handle spacebar for panning
-      if (e.key === " ") {
-        if (!editingElementId) {
-          e.preventDefault();
-          isSpacebarPressedRef.current = true;
-          setIsSpacebarPressed(true);
-        }
-        return;
-      }
-      
-      if (editingElementId) {
-        if (e.key === "Escape") {
-          commitEdit();
-        }
-        return;
-      }
-      if (e.key === "Delete" || e.key === "Backspace") {
-        if (useCanvasStore.getState().selectedElementIds.size > 0) {
-          e.preventDefault();
-          deleteSelectedElements();
-        }
-      }
-      if (e.key === "Escape") {
-        clearSelection();
-        setActiveTool("pointer");
-      }
-      if (e.key === "v" || e.key === "V") {
-        setActiveTool("pointer");
-      }
-      if (e.key === "s" || e.key === "S") {
-        setActiveTool("sticky-note");
-      }
-      if (e.key === "r" || e.key === "R") {
-        setActiveTool("rectangle");
-      }
-      if (e.key === "c" || e.key === "C") {
-        setActiveTool("circle");
-      }
-      if (e.key === "l" || e.key === "L") {
-        setActiveTool("line");
-      }
-      if (e.key === "t" || e.key === "T") {
-        setActiveTool("text");
+      if (e.key === " " && !editingElementId) {
+        e.preventDefault();
+        isSpacebarPressedRef.current = true;
+        setIsSpacebarPressed(true);
       }
     };
-
     const handleKeyUp = (e: KeyboardEvent) => {
       if (e.key === " ") {
         isSpacebarPressedRef.current = false;
         setIsSpacebarPressed(false);
       }
     };
-
     window.addEventListener("keydown", handleKeyDown);
     window.addEventListener("keyup", handleKeyUp);
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("keyup", handleKeyUp);
     };
-  }, [editingElementId, deleteSelectedElements, commitEdit, clearSelection]);
+  }, [editingElementId]);
 
   if (isPending || !session?.user || !currentUser) {
     return <main className="min-h-screen grid place-content-center">Loading session...</main>;
@@ -721,6 +868,9 @@ export default function CanvasPage() {
   };
 
   const onSectionPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+    // Track pointer position for custom cursor
+    setPointerPosition({ x: event.clientX, y: event.clientY });
+    
     if (perfEnabled) {
       perfCollectorRef.current.markInput();
     }
@@ -834,7 +984,7 @@ export default function CanvasPage() {
       <section
         ref={surfaceRef}
         className="relative overflow-hidden bg-[#121212] touch-none"
-        style={{ cursor: isPanning ? "grabbing" : isSpacebarPressed ? "grab" : undefined }}
+        style={{ cursor: rotationCursor ? "none" : isPanning ? "grabbing" : isSpacebarPressed ? "grab" : undefined }}
         onPointerDown={onSectionPointerDown}
         onPointerMove={onSectionPointerMove}
         onPointerUp={onSectionPointerUp}
@@ -860,6 +1010,8 @@ export default function CanvasPage() {
           onDragElement={(...args) => { setIsDraggingElement(false); moveElement(...args); }}
           onDragSelectedElements={(...args) => { setIsDraggingElement(false); moveSelectedElements(...args); }}
           onResizeElement={resizeElement}
+          onRotateElement={rotateElement}
+          onRotateCursorChange={setRotationCursor}
           onDblClickElement={startEditing}
           onLineEndpointDrag={moveLineEndpoint}
           onLineEndpointDragEnd={moveLineEndpoint}
@@ -986,8 +1138,19 @@ export default function CanvasPage() {
           activeTool={activeTool}
           onToolChange={setActiveTool}
           onDelete={deleteSelectedElements}
+          onDuplicate={duplicateSelectedElements}
           hasSelection={selectedElementIds.size > 0}
         />
+
+        {/* Custom rotation cursor */}
+        {rotationCursor && (
+          <RotationCursor
+            x={pointerPosition.x}
+            y={pointerPosition.y}
+            corner={rotationCursor.corner}
+            elementRotation={rotationCursor.elementRotation}
+          />
+        )}
       </section>
 
       <footer className="px-4 py-2.5 border-t border-[#2a2a2a] bg-[#1a1a1a] text-[#999] text-sm">

@@ -22,6 +22,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { authClient } from "@/lib/auth-client";
+import { stripHtmlTags } from "@collab/shared/validation";
 
 type Board = {
   id: string;
@@ -81,15 +82,16 @@ export default function DashboardPage() {
   };
 
   const createBoard = async () => {
-    const trimmed = newBoardName.trim();
-    if (!trimmed) return;
+    // Sanitize and truncate to max length (200 chars)
+    const sanitized = stripHtmlTags(newBoardName).trim().slice(0, 200);
+    if (!sanitized) return;
     setIsCreating(true);
     try {
       const res = await fetch(`${API_URL}/api/boards`, {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: trimmed }),
+        body: JSON.stringify({ name: sanitized }),
       });
       if (res.ok) {
         const data = await res.json();
@@ -108,21 +110,22 @@ export default function DashboardPage() {
 
   const saveEdit = async () => {
     if (!editTarget) return;
-    const trimmed = editName.trim();
-    if (!trimmed) return;
+    // Sanitize and truncate to max length (200 chars)
+    const sanitized = stripHtmlTags(editName).trim().slice(0, 200);
+    if (!sanitized) return;
     setIsSavingEdit(true);
     try {
       const res = await fetch(`${API_URL}/api/boards/${editTarget.id}`, {
         method: "PATCH",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: trimmed }),
+        body: JSON.stringify({ name: sanitized }),
       });
       if (res.ok) {
         setBoards((prev) =>
           prev.map((b) =>
             b.id === editTarget.id
-              ? { ...b, name: trimmed, updatedAt: new Date().toISOString() }
+              ? { ...b, name: sanitized, updatedAt: new Date().toISOString() }
               : b
           )
         );

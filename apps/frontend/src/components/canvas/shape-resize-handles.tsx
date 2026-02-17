@@ -9,10 +9,15 @@ type Pointer = { x: number; y: number };
 
 type ShapeResizeHandlesProps = {
   box: ElementBox;
+  rotation: number;
   zoomScale: number;
   onResizeStart: (handle: ResizeHandle, pointer: Pointer) => void;
   onResizeMove: (handle: ResizeHandle, pointer: Pointer) => void;
   onResizeEnd: (handle: ResizeHandle, pointer: Pointer) => void;
+  onRotateStart?: (pointer: Pointer) => void;
+  onRotateMove?: (pointer: Pointer, shiftKey: boolean) => void;
+  onRotateEnd?: (pointer: Pointer) => void;
+  onRotateHover?: (corner: RotationCorner | null) => void;
 };
 
 function getWorldPointer(event: KonvaEventObject<DragEvent>): Pointer | null {
@@ -45,28 +50,58 @@ function getHandlePositions(width: number, height: number): Record<ResizeHandle,
 
 const HANDLE_ORDER: ResizeHandle[] = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
 
-const HANDLE_CURSOR: Record<ResizeHandle, string> = {
-  nw: "nwse-resize",
-  n: "ns-resize",
-  ne: "nesw-resize",
-  e: "ew-resize",
-  se: "nwse-resize",
-  s: "ns-resize",
-  sw: "nesw-resize",
-  w: "ew-resize",
+const CURSOR_CYCLE = ["ns-resize", "nesw-resize", "ew-resize", "nwse-resize"] as const;
+
+const HANDLE_BASE_ANGLE: Record<ResizeHandle, number> = {
+  n: 0, ne: 45, e: 90, se: 135,
+  s: 180, sw: 225, w: 270, nw: 315,
 };
+
+function getRotatedCursor(handle: ResizeHandle, rotation: number): string {
+  const effectiveAngle = ((HANDLE_BASE_ANGLE[handle] + rotation) % 360 + 360) % 360;
+  const index = Math.round(effectiveAngle / 45) % 4;
+  return CURSOR_CYCLE[index];
+}
+
+// Corners that get rotation zones
+type RotationCorner = "nw" | "ne" | "se" | "sw";
+const ROTATION_CORNERS: RotationCorner[] = ["nw", "ne", "se", "sw"];
 
 export function ShapeResizeHandles({
   box,
+  rotation,
   zoomScale,
   onResizeStart,
   onResizeMove,
   onResizeEnd,
+  onRotateStart,
+  onRotateMove,
+  onRotateEnd,
+  onRotateHover,
 }: ShapeResizeHandlesProps) {
   const visualScale = Math.max(zoomScale, 0.2);
   const handleRadius = 6 / visualScale;
   const borderPadding = 3 / visualScale;
   const positions = getHandlePositions(box.width, box.height);
+
+  const rotationZoneSize = 16 / visualScale;
+  const rotationZoneOffset = 8 / visualScale; // distance from corner
+
+  // Get rotation zone positions outside corners
+  const getRotationZonePosition = (corner: RotationCorner): { x: number; y: number } => {
+    const offset = rotationZoneOffset;
+    const size = rotationZoneSize;
+    switch (corner) {
+      case "nw":
+        return { x: -offset - size, y: -offset - size };
+      case "ne":
+        return { x: box.width + offset, y: -offset - size };
+      case "se":
+        return { x: box.width + offset, y: box.height + offset };
+      case "sw":
+        return { x: -offset - size, y: box.height + offset };
+    }
+  };
 
   return (
     <>
@@ -80,11 +115,67 @@ export function ShapeResizeHandles({
         dash={[6 / visualScale, 3 / visualScale]}
         listening={false}
       />
+      {/* Rotation zones - render before resize handles so handles take precedence */}
+      {onRotateStart && onRotateMove && onRotateEnd &&
+        ROTATION_CORNERS.map((corner) => {
+          const zonePos = getRotationZonePosition(corner);
+          let isDragging = false;
+          return (
+            <Rect
+              key={`rotate-${corner}`}
+              name="rotation-zone"
+              x={zonePos.x}
+              y={zonePos.y}
+              width={rotationZoneSize}
+              height={rotationZoneSize}
+              fill="transparent"
+              draggable
+              dragOnTop={false}
+              onMouseEnter={(event) => {
+                const container = event.target.getStage()?.container();
+                if (container) container.style.cursor = "none";
+                onRotateHover?.(corner);
+              }}
+              onMouseLeave={(event) => {
+                // Don't reset during active drag — cursor managed by page-level state
+                if (isDragging) return;
+                const container = event.target.getStage()?.container();
+                if (container) container.style.cursor = "default";
+                onRotateHover?.(null);
+              }}
+              onDragStart={(event) => {
+                isDragging = true;
+                event.cancelBubble = true;
+                const container = event.target.getStage()?.container();
+                if (container) container.style.cursor = "none";
+                const pointer = getWorldPointer(event);
+                if (pointer) onRotateStart(pointer);
+              }}
+              onDragMove={(event) => {
+                event.cancelBubble = true;
+                const pointer = getWorldPointer(event);
+                const shiftKey = event.evt?.shiftKey ?? false;
+                if (pointer) onRotateMove(pointer, shiftKey);
+              }}
+              onDragEnd={(event) => {
+                isDragging = false;
+                event.cancelBubble = true;
+                const container = event.target.getStage()?.container();
+                if (container) container.style.cursor = "default";
+                const pointer = getWorldPointer(event);
+                if (pointer) onRotateEnd(pointer);
+                event.target.position(zonePos);
+              }}
+            />
+          );
+        })}
+      {/* Resize handles - render after rotation zones to take cursor priority */}
       {HANDLE_ORDER.map((handle) => {
         const position = positions[handle];
         return (
           <Circle
             key={handle}
+            name="resize-handle"
             x={position.x}
             y={position.y}
             radius={handleRadius}
@@ -95,7 +186,7 @@ export function ShapeResizeHandles({
             dragOnTop={false}
             onMouseEnter={(event) => {
               const container = event.target.getStage()?.container();
-              if (container) container.style.cursor = HANDLE_CURSOR[handle];
+              if (container) container.style.cursor = getRotatedCursor(handle, rotation);
             }}
             onMouseLeave={(event) => {
               const container = event.target.getStage()?.container();

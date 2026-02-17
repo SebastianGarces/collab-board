@@ -42,10 +42,12 @@ All scripts (perf benchmarks, seed scripts, migrations, etc.) assume services ar
 
 When making code changes, run performance checks incrementally for the area you changed. Do not wait until the very end of a large task.
 
+**IMPORTANT:** Do NOT run `bun run perf:frontend:ci` in a sandboxed environment. The frontend performance tests require full system access (browser automation, display server, etc.) and will fail in restricted environments. If you need to run performance checks but are in a sandbox, request `required_permissions: ["all"]` or skip the frontend perf check and report it to the developer.
+
 - Backend real-time/collab changes (`apps/backend/src/collab/**`, websocket sync, room manager, protocol):
   - Run `bun run perf:ws:ci`
 - Frontend canvas/realtime/client sync changes (`apps/frontend/src/app/canvas/**`, `apps/frontend/src/components/canvas/**`, `apps/frontend/src/lib/collab.ts`, perf test harness):
-  - Run `bun run perf:frontend:ci`
+  - Run `bun run perf:frontend:ci` (NOT in sandbox - see above)
 - Shared budget/metrics/script/workflow changes (`docs/performance-budgets.json`, `scripts/perf-*.ts`, `.github/workflows/performance.yml`, root/package scripts):
   - Run `bun run perf:check`
 - Cross-cutting changes touching both frontend and backend realtime paths:
