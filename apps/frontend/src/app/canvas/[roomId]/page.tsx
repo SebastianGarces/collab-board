@@ -651,10 +651,11 @@ export default function CanvasPage() {
       perfCollectorRef.current.markInput();
     }
     if (isPanning && panStartRef.current) {
+      const panStart = panStartRef.current;
       setCamera((prev) => ({
         ...prev,
-        x: event.clientX - panStartRef.current!.x,
-        y: event.clientY - panStartRef.current!.y
+        x: event.clientX - panStart.x,
+        y: event.clientY - panStart.y
       }));
       return;
     }
@@ -724,10 +725,11 @@ export default function CanvasPage() {
       perfCollectorRef.current.markInput();
     }
     if (isPanning && panStartRef.current) {
+      const panStart = panStartRef.current;
       setCamera((prev) => ({
         ...prev,
-        x: event.clientX - panStartRef.current!.x,
-        y: event.clientY - panStartRef.current!.y
+        x: event.clientX - panStart.x,
+        y: event.clientY - panStart.y
       }));
     }
   };
