@@ -714,6 +714,8 @@ export default function CanvasPage() {
     if (isPointerMode && (event.button === 1 || isSpacebarPressedRef.current)) {
       setIsPanning(true);
       panStartRef.current = { x: event.clientX - camera.x, y: event.clientY - camera.y };
+      marqueeStartRef.current = null;
+      setMarqueeRect(null);
     }
   };
 
@@ -860,6 +862,7 @@ export default function CanvasPage() {
           onLineEndpointDrag={moveLineEndpoint}
           onLineEndpointDragEnd={moveLineEndpoint}
           onStagePointerDown={(worldX, worldY) => {
+            if (isSpacebarPressedRef.current) return;
             clearSelection();
             marqueeStartRef.current = { x: worldX, y: worldY };
           }}
