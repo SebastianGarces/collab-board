@@ -491,8 +491,26 @@ export default function CanvasPage() {
       perfCollectorRef.current.markInput();
     }
     event.preventDefault();
-    const nextScale = clamp(camera.scale * (event.deltaY > 0 ? 0.9 : 1.1), MIN_SCALE, MAX_SCALE);
-    setCamera((prev) => ({ ...prev, scale: nextScale }));
+
+    const rect = surfaceRef.current?.getBoundingClientRect();
+    if (!rect) return;
+
+    const mouseX = event.clientX - rect.left;
+    const mouseY = event.clientY - rect.top;
+
+    const nextScale = clamp(
+      camera.scale * (event.deltaY > 0 ? 0.9 : 1.1),
+      MIN_SCALE,
+      MAX_SCALE
+    );
+
+    // Keep the world point under the cursor fixed
+    const worldX = (mouseX - camera.x) / camera.scale;
+    const worldY = (mouseY - camera.y) / camera.scale;
+    const newX = mouseX - worldX * nextScale;
+    const newY = mouseY - worldY * nextScale;
+
+    setCamera({ x: newX, y: newY, scale: nextScale });
   };
 
   const signOut = async () => {
