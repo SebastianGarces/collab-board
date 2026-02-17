@@ -34,7 +34,7 @@ const ELEMENT_CAPABILITIES: Record<ElementType, ElementCapabilities> = {
 };
 
 function getElementColor(element: BoardElement, colorKey: string): string {
-  return (element as Record<string, unknown>)[colorKey] as string ?? "#ffffff";
+  return (element as unknown as Record<string, unknown>)[colorKey] as string ?? "#ffffff";
 }
 
 function getElementFontFamily(element: BoardElement): string {
