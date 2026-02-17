@@ -20,6 +20,3 @@ export const corsOrigins = env.CORS_ORIGIN.split(",")
     return origin.replace(/\/$/, "");
   });
 
-console.log("[env] CORS_ORIGIN raw:", env.CORS_ORIGIN);
-console.log("[env] corsOrigins resolved:", corsOrigins);
-console.log("[env] BETTER_AUTH_URL:", env.BETTER_AUTH_URL);
