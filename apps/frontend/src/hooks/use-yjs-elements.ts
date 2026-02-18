@@ -258,7 +258,7 @@ export function useYjsElements(doc: Y.Doc | null): BoardElement[] {
       setElements(next);
     };
 
-    const syncIncremental = (events: Y.YEvent<unknown>[]) => {
+    const syncIncremental = (events: Y.YEvent<Y.AbstractType<any>>[]) => {
       const changedIds = new Set<string>();
       let orderMayHaveChanged = false;
 
