@@ -2,7 +2,7 @@
 
 import { useHotkey } from "@tanstack/react-hotkeys";
 import type Konva from "konva";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, Keyboard } from "lucide-react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
@@ -19,6 +19,15 @@ import {
   type ElementBox,
 } from "@/components/canvas/shape-transform";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
+import { Kbd, KbdGroup } from "@/components/ui/kbd";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useYjsElements } from "@/hooks/use-yjs-elements";
 import { authClient } from "@/lib/auth-client";
@@ -83,6 +92,21 @@ function colorFromId(id: string) {
 
 function generateId() {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function ShortcutRow({
+  keys,
+  desc,
+}: {
+  keys: React.ReactNode;
+  desc: string;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-4">
+      <span className="text-[#999]">{desc}</span>
+      <span className="flex items-center gap-0.5">{keys}</span>
+    </div>
+  );
 }
 
 const RemoteCursorOverlay = memo(function RemoteCursorOverlay({
@@ -181,11 +205,14 @@ export default function CanvasPage() {
   const [connectorSnapAnchors, setConnectorSnapAnchors] = useState<Point[]>([]);
   const [connectorSnapTarget, setConnectorSnapTarget] = useState<Point | null>(null);
   const pendingDragMoveRef = useRef<{ id: string; x: number; y: number } | null>(null);
+  const pendingGroupDragMoveRef = useRef<{ dx: number; dy: number } | null>(null);
+  const groupDragOriginsRef = useRef<Map<string, { x: number; y: number }> | null>(null);
   const pendingResizeRef = useRef<{ id: string; box: ElementBox } | null>(null);
   const pendingRotateRef = useRef<{ id: string; rotation: number } | null>(null);
   const pendingLiveEditTextRef = useRef<string | null>(null);
   const pendingRemoteCursorsRef = useRef<RemoteCursor[] | null>(null);
   const dragMoveRafRef = useRef<number | null>(null);
+  const groupDragMoveRafRef = useRef<number | null>(null);
   const resizeRafRef = useRef<number | null>(null);
   const rotateRafRef = useRef<number | null>(null);
   const liveEditRafRef = useRef<number | null>(null);
@@ -822,6 +849,12 @@ export default function CanvasPage() {
         elementMap.set("frameId", targetFrameId);
       });
     }
+
+    groupDragOriginsRef.current = null;
+    if (groupDragMoveRafRef.current !== null) {
+      window.cancelAnimationFrame(groupDragMoveRafRef.current);
+      groupDragMoveRafRef.current = null;
+    }
   }, []);
 
   const moveSelectedElements = useCallback((deltaX: number, deltaY: number) => {
@@ -829,6 +862,8 @@ export default function CanvasPage() {
     if (!doc) return;
     const ids = useCanvasStore.getState().selectedElementIds;
     const elementsMap = doc.getMap("elements");
+
+    const origins = groupDragOriginsRef.current;
 
     // Read frame info directly from Yjs (avoids stale React state)
     const selectedFrameIds = new Set<string>();
@@ -840,11 +875,14 @@ export default function CanvasPage() {
       if (m.get("type") !== "frame") return;
       if (ids.has(key)) selectedFrameIds.add(key);
       const isMoving = ids.has(key);
+      const frameOrigin = origins?.get(key);
+      const baseX = frameOrigin?.x ?? ((m.get("x") as number) ?? 0);
+      const baseY = frameOrigin?.y ?? ((m.get("y") as number) ?? 0);
       shiftedFrames.push({
         id: key,
         type: "frame",
-        x: ((m.get("x") as number) ?? 0) + (isMoving ? deltaX : 0),
-        y: ((m.get("y") as number) ?? 0) + (isMoving ? deltaY : 0),
+        x: baseX + (isMoving ? deltaX : 0),
+        y: baseY + (isMoving ? deltaY : 0),
         width: (m.get("width") as number) ?? 0,
         height: (m.get("height") as number) ?? 0,
         title: (m.get("title") as string) ?? "",
@@ -859,8 +897,9 @@ export default function CanvasPage() {
       for (const id of ids) {
         const elementMap = elementsMap.get(id) as Y.Map<unknown> | undefined;
         if (!elementMap) continue;
-        const oldX = (elementMap.get("x") as number) ?? 0;
-        const oldY = (elementMap.get("y") as number) ?? 0;
+        const origin = origins?.get(id);
+        const oldX = origin?.x ?? ((elementMap.get("x") as number) ?? 0);
+        const oldY = origin?.y ?? ((elementMap.get("y") as number) ?? 0);
         const newX = oldX + deltaX;
         const newY = oldY + deltaY;
         elementMap.set("x", newX);
@@ -880,6 +919,12 @@ export default function CanvasPage() {
         }
       }
     });
+
+    groupDragOriginsRef.current = null;
+    if (groupDragMoveRafRef.current !== null) {
+      window.cancelAnimationFrame(groupDragMoveRafRef.current);
+      groupDragMoveRafRef.current = null;
+    }
   }, []);
 
   const flushPendingDragMove = useCallback(() => {
@@ -907,6 +952,62 @@ export default function CanvasPage() {
       });
     },
     [flushPendingDragMove]
+  );
+
+  const onGroupDragStart = useCallback(() => {
+    const doc = docRef.current;
+    if (!doc) return;
+    const store = useCanvasStore.getState();
+    const gd = store.groupDrag;
+    if (!gd) return;
+
+    const ids = new Set<string>();
+    for (const id of store.selectedElementIds) ids.add(id);
+    for (const id of gd.childIds) ids.add(id);
+
+    const elementsMap = doc.getMap("elements");
+    const origins = new Map<string, { x: number; y: number }>();
+    for (const id of ids) {
+      const elMap = elementsMap.get(id) as Y.Map<unknown> | undefined;
+      if (!elMap) continue;
+      origins.set(id, {
+        x: (elMap.get("x") as number) ?? 0,
+        y: (elMap.get("y") as number) ?? 0,
+      });
+    }
+    groupDragOriginsRef.current = origins;
+  }, []);
+
+  const flushPendingGroupDragMove = useCallback(() => {
+    const doc = docRef.current;
+    if (!doc) return;
+    const pending = pendingGroupDragMoveRef.current;
+    if (!pending) return;
+    pendingGroupDragMoveRef.current = null;
+    const origins = groupDragOriginsRef.current;
+    if (!origins || origins.size === 0) return;
+
+    const elementsMap = doc.getMap("elements");
+    doc.transact(() => {
+      for (const [id, origin] of origins) {
+        const elMap = elementsMap.get(id) as Y.Map<unknown> | undefined;
+        if (!elMap) continue;
+        elMap.set("x", origin.x + pending.dx);
+        elMap.set("y", origin.y + pending.dy);
+      }
+    }, "group-drag-move");
+  }, []);
+
+  const onGroupDragMove = useCallback(
+    (dx: number, dy: number) => {
+      pendingGroupDragMoveRef.current = { dx, dy };
+      if (groupDragMoveRafRef.current !== null) return;
+      groupDragMoveRafRef.current = window.requestAnimationFrame(() => {
+        groupDragMoveRafRef.current = null;
+        flushPendingGroupDragMove();
+      });
+    },
+    [flushPendingGroupDragMove]
   );
 
   const flushPendingResize = useCallback(() => {
@@ -971,6 +1072,9 @@ export default function CanvasPage() {
       }
       if (resizeRafRef.current !== null) {
         window.cancelAnimationFrame(resizeRafRef.current);
+      }
+      if (groupDragMoveRafRef.current !== null) {
+        window.cancelAnimationFrame(groupDragMoveRafRef.current);
       }
       if (rotateRafRef.current !== null) {
         window.cancelAnimationFrame(rotateRafRef.current);
@@ -1319,6 +1423,40 @@ export default function CanvasPage() {
     });
   }, [camera, elements, setSelectedElementIds, createStickyNote]);
 
+  const zoomToSelection = useCallback(() => {
+    const surface = surfaceRef.current;
+    if (!surface) return;
+
+    const ids = useCanvasStore.getState().selectedElementIds;
+    const targetElements =
+      ids.size > 0
+        ? elements.filter((el) => ids.has(el.id))
+        : elements;
+
+    const bbox = getBoundingBox(targetElements);
+    if (!bbox || bbox.width <= 0 || bbox.height <= 0) return;
+
+    const rect = surface.getBoundingClientRect();
+    const padding = 48;
+    const availableWidth = Math.max(1, rect.width - 2 * padding);
+    const availableHeight = Math.max(1, rect.height - 2 * padding);
+    const scale = clamp(
+      Math.min(availableWidth / bbox.width, availableHeight / bbox.height),
+      MIN_SCALE,
+      MAX_SCALE
+    );
+
+    const bboxCenterX = bbox.x + bbox.width / 2;
+    const bboxCenterY = bbox.y + bbox.height / 2;
+    const newCam: Camera = {
+      x: rect.width / 2 - bboxCenterX * scale,
+      y: rect.height / 2 - bboxCenterY * scale,
+      scale,
+    };
+    applyCameraDirect(newCam);
+    setCameraState(newCam);
+  }, [elements, applyCameraDirect, setCameraState]);
+
   const updateElementProperty = useCallback((id: string, key: string, value: unknown) => {
     const doc = docRef.current;
     if (!doc) return;
@@ -1426,6 +1564,7 @@ export default function CanvasPage() {
   // Keyboard shortcuts via TanStack Hotkeys
   // Tool shortcuts (single keys) -- won't fire when Mod/Ctrl is held
   useHotkey("V", () => setActiveTool("pointer"), { enabled: !editingElementId });
+  useHotkey("H", () => setActiveTool("hand"), { enabled: !editingElementId });
   useHotkey("S", () => setActiveTool("sticky-note"), { enabled: !editingElementId });
   useHotkey("R", () => setActiveTool("rectangle"), { enabled: !editingElementId });
   useHotkey("C", () => setActiveTool("circle"), { enabled: !editingElementId });
@@ -1471,6 +1610,8 @@ export default function CanvasPage() {
     }
   }, { enabled: !editingElementId });
 
+  useHotkey("Shift+2", () => zoomToSelection(), { enabled: !editingElementId });
+
   // Spacebar pan (needs keydown + keyup tracking, kept as manual useEffect)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -1497,6 +1638,7 @@ export default function CanvasPage() {
   const isSessionReady = !isPending && !!session?.user && !!currentUser;
 
   const isPointerMode = activeTool === "pointer";
+  const isHandMode = activeTool === "hand";
 
   const toWorld = (event: ReactPointerEvent<HTMLDivElement>) => {
     const element = surfaceRef.current;
@@ -1514,7 +1656,11 @@ export default function CanvasPage() {
     if (perfEnabled) {
       perfCollectorRef.current.markInput();
     }
-    if (event.button === 1 || isSpacebarPressedRef.current) {
+    if (
+      event.button === 1 ||
+      isSpacebarPressedRef.current ||
+      activeTool === "hand"
+    ) {
       setIsPanning(true);
       const cam = cameraRef.current;
       panStartRef.current = { x: event.clientX - cam.x, y: event.clientY - cam.y };
@@ -1721,7 +1867,10 @@ export default function CanvasPage() {
 
   // --- Section-level handlers (always active, for wheel zoom and space-pan in pointer mode) ---
   const onSectionPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (isPointerMode && (event.button === 1 || isSpacebarPressedRef.current)) {
+    if (
+      (isPointerMode && (event.button === 1 || isSpacebarPressedRef.current)) ||
+      activeTool === "hand"
+    ) {
       setIsPanning(true);
       const cam = cameraRef.current;
       panStartRef.current = { x: event.clientX - cam.x, y: event.clientY - cam.y };
@@ -1863,6 +2012,11 @@ export default function CanvasPage() {
     return <main className="min-h-screen grid place-content-center">Loading session...</main>;
   }
 
+  const modKey =
+    typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform)
+      ? "⌘"
+      : "Ctrl";
+
   return (
     <main className="min-h-screen grid grid-rows-[auto_1fr_auto]">
       <header className="px-4 py-2.5 border-b border-[#2a2a2a] bg-[#1a1a1a] flex justify-between items-center gap-4">
@@ -1910,7 +2064,15 @@ export default function CanvasPage() {
       <section
         ref={surfaceRef}
         className="relative overflow-hidden bg-[#121212] touch-none"
-        style={{ cursor: rotationCursor ? "none" : isPanning ? "grabbing" : isSpacebarPressed ? "grab" : undefined }}
+        style={{
+          cursor: rotationCursor
+            ? "none"
+            : isPanning
+              ? "grabbing"
+              : isSpacebarPressed || isHandMode
+                ? "grab"
+                : undefined,
+        }}
         onPointerDown={onSectionPointerDown}
         onPointerMove={onSectionPointerMove}
         onPointerUp={onSectionPointerUp}
@@ -1939,6 +2101,8 @@ export default function CanvasPage() {
           onDragElementMove={onDragElementMove}
           onDragElement={(...args) => { setIsDraggingElement(false); moveElement(...args); }}
           onDragSelectedElements={(...args) => { setIsDraggingElement(false); moveSelectedElements(...args); }}
+          onGroupDragStart={onGroupDragStart}
+          onGroupDragMove={onGroupDragMove}
           onResizeElement={resizeElement}
           onRotateElement={rotateElement}
           onRotateCursorChange={setRotationCursor}
@@ -2119,7 +2283,13 @@ export default function CanvasPage() {
             element drag/click. Pan via shift+drag works through the overlay in non-pointer modes. */}
         <div
           className={`absolute inset-0 z-20 ${
-            isPointerMode && !isPanning ? "pointer-events-none" : "cursor-crosshair"
+            isPointerMode && !isPanning
+              ? "pointer-events-none"
+              : isHandMode
+                ? isPanning
+                  ? "cursor-grabbing"
+                  : "cursor-grab"
+                : "cursor-crosshair"
           }`}
           onPointerDown={onOverlayPointerDown}
           onPointerMove={onOverlayPointerMove}
@@ -2162,26 +2332,81 @@ export default function CanvasPage() {
         )}
       </section>
 
-      <footer className="px-4 py-2.5 border-t border-[#2a2a2a] bg-[#1a1a1a] text-[#999] text-sm">
-        <kbd className="bg-[#242424] border border-[#3a3a3a] border-b-2 rounded px-1.5 py-0.5">V</kbd> Select
-        <span className="mx-1.5 text-[#555]">·</span>
-        <kbd className="bg-[#242424] border border-[#3a3a3a] border-b-2 rounded px-1.5 py-0.5">S</kbd> Sticky
-        <span className="mx-1.5 text-[#555]">·</span>
-        <kbd className="bg-[#242424] border border-[#3a3a3a] border-b-2 rounded px-1.5 py-0.5">R</kbd> Rect
-        <span className="mx-1.5 text-[#555]">·</span>
-        <kbd className="bg-[#242424] border border-[#3a3a3a] border-b-2 rounded px-1.5 py-0.5">C</kbd> Circle
-        <span className="mx-1.5 text-[#555]">·</span>
-        <kbd className="bg-[#242424] border border-[#3a3a3a] border-b-2 rounded px-1.5 py-0.5">L</kbd> Line
-        <span className="mx-1.5 text-[#555]">·</span>
-        <kbd className="bg-[#242424] border border-[#3a3a3a] border-b-2 rounded px-1.5 py-0.5">T</kbd> Text
-        <span className="mx-1.5 text-[#555]">·</span>
-        <kbd className="bg-[#242424] border border-[#3a3a3a] border-b-2 rounded px-1.5 py-0.5">F</kbd> Frame
-        <span className="mx-1.5 text-[#555]">·</span>
-        <kbd className="bg-[#242424] border border-[#3a3a3a] border-b-2 rounded px-1.5 py-0.5">X</kbd> Connector
-        <span className="mx-1.5 text-[#555]">·</span>
-        <kbd className="bg-[#242424] border border-[#3a3a3a] border-b-2 rounded px-1.5 py-0.5">Space</kbd> Pan
-        <span className="mx-1.5 text-[#555]">·</span>
-        Scroll to zoom
+      <footer className="px-4 py-2.5 border-t border-[#2a2a2a] bg-[#1a1a1a] text-[#999] text-sm flex items-center justify-between gap-4">
+        <span className="text-[#666]">Scroll to zoom · <Kbd>Space</Kbd> or <Kbd>H</Kbd> to pan</span>
+        <Dialog>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <DialogTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="text-[#999] hover:text-white hover:bg-[#2a2a2a]"
+                >
+                  <Keyboard className="size-4" />
+                  Shortcuts
+                </Button>
+              </DialogTrigger>
+            </TooltipTrigger>
+            <TooltipContent side="top">View keyboard shortcuts</TooltipContent>
+          </Tooltip>
+          <DialogContent className="sm:max-w-md bg-[#1a1a1a] border-[#2a2a2a]">
+            <DialogHeader>
+              <DialogTitle>Keyboard Shortcuts</DialogTitle>
+            </DialogHeader>
+            <div className="grid gap-3 py-2">
+              <ShortcutRow keys={<Kbd>V</Kbd>} desc="Select tool" />
+              <ShortcutRow keys={<Kbd>H</Kbd>} desc="Pan mode" />
+              <ShortcutRow keys={<Kbd>S</Kbd>} desc="Add sticky note" />
+              <ShortcutRow keys={<Kbd>R</Kbd>} desc="Add rectangle" />
+              <ShortcutRow keys={<Kbd>C</Kbd>} desc="Add circle" />
+              <ShortcutRow keys={<Kbd>L</Kbd>} desc="Add line" />
+              <ShortcutRow keys={<Kbd>T</Kbd>} desc="Add text" />
+              <ShortcutRow keys={<Kbd>F</Kbd>} desc="Add frame" />
+              <ShortcutRow keys={<Kbd>X</Kbd>} desc="Add connector" />
+              <ShortcutRow keys={<Kbd>Space</Kbd>} desc="Pan canvas" />
+              <ShortcutRow keys={<Kbd>Scroll</Kbd>} desc="Zoom in or out" />
+              <ShortcutRow
+                keys={
+                  <KbdGroup>
+                    <Kbd>{modKey}</Kbd>
+                    <Kbd>C</Kbd>
+                  </KbdGroup>
+                }
+                desc="Copy selection"
+              />
+              <ShortcutRow
+                keys={
+                  <KbdGroup>
+                    <Kbd>{modKey}</Kbd>
+                    <Kbd>V</Kbd>
+                  </KbdGroup>
+                }
+                desc="Paste"
+              />
+              <ShortcutRow
+                keys={
+                  <KbdGroup>
+                    <Kbd>{modKey}</Kbd>
+                    <Kbd>D</Kbd>
+                  </KbdGroup>
+                }
+                desc="Duplicate selection"
+              />
+              <ShortcutRow keys={<Kbd>Del</Kbd>} desc="Delete selection" />
+              <ShortcutRow keys={<Kbd>esc</Kbd>} desc="Deselect or reset" />
+              <ShortcutRow
+                keys={
+                  <KbdGroup>
+                    <Kbd>⇧</Kbd>
+                    <Kbd>2</Kbd>
+                  </KbdGroup>
+                }
+                desc="Zoom to selection"
+              />
+            </div>
+          </DialogContent>
+        </Dialog>
       </footer>
     </main>
   );

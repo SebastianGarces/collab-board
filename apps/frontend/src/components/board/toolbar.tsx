@@ -1,12 +1,12 @@
 "use client";
 
 import { memo } from "react";
-import { ArrowRight, Circle, Copy, LayoutGrid, Minus, MousePointer2, Square, StickyNote, Trash2, Type } from "lucide-react";
+import { ArrowRight, Circle, Copy, Hand, LayoutGrid, Minus, MousePointer2, Square, StickyNote, Trash2, Type } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
-export type ActiveTool = "pointer" | "sticky-note" | "rectangle" | "circle" | "line" | "text" | "frame" | "connector";
+export type ActiveTool = "pointer" | "hand" | "sticky-note" | "rectangle" | "circle" | "line" | "text" | "frame" | "connector";
 
 type ToolbarProps = {
   activeTool: ActiveTool;
@@ -18,6 +18,7 @@ type ToolbarProps = {
 
 const tools: { id: ActiveTool; icon: typeof MousePointer2; label: string }[] = [
   { id: "pointer", icon: MousePointer2, label: "Select" },
+  { id: "hand", icon: Hand, label: "Pan" },
   { id: "sticky-note", icon: StickyNote, label: "Sticky Note" },
   { id: "rectangle", icon: Square, label: "Rectangle" },
   { id: "circle", icon: Circle, label: "Circle" },
