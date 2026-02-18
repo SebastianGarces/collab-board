@@ -3,8 +3,8 @@
 import { type ReactNode, useRef, useState } from "react";
 import { Group, Rect } from "react-konva";
 
-import type { BaseElement } from "@collab/shared/collab";
 import { useCanvasStore } from "@/stores/canvas-store";
+import type { BaseElement } from "@collab/shared/collab";
 import { ShapeResizeHandles } from "./shape-resize-handles";
 import type { ElementBox, ResizeHandle, ResizeSession } from "./shape-transform";
 import { resizeBoxFromHandle } from "./shape-transform";
@@ -28,6 +28,7 @@ type InteractiveShapeProps = {
   draggable: boolean;
   onSelect: (id: string, shiftKey: boolean) => void;
   onDragStart?: (id: string) => void;
+  onDragMove?: (id: string, x: number, y: number) => void;
   onDragEnd: (id: string, x: number, y: number) => void;
   resizable?: boolean;
   onResize?: (id: string, box: ElementBox) => void;
@@ -36,6 +37,8 @@ type InteractiveShapeProps = {
   zoomScale?: number;
   onDblClick?: (id: string) => void;
   hideSelectionOutline?: boolean;
+  getDragChildIds?: () => string[];
+  onDragPositionUpdate?: (x: number, y: number) => void;
   children: ReactNode;
 };
 
@@ -46,6 +49,7 @@ export function InteractiveShape({
   draggable,
   onSelect,
   onDragStart,
+  onDragMove,
   onDragEnd,
   resizable = false,
   onResize,
@@ -54,6 +58,8 @@ export function InteractiveShape({
   zoomScale = 1,
   onDblClick,
   hideSelectionOutline = false,
+  getDragChildIds,
+  onDragPositionUpdate,
   children,
 }: InteractiveShapeProps) {
   const resizeSessionRef = useRef<ResizeSession | null>(null);
@@ -69,14 +75,14 @@ export function InteractiveShape({
   const groupDragDx = useCanvasStore((s) =>
     s.groupDrag &&
     s.groupDrag.draggedId !== element.id &&
-    s.selectedElementIds.has(element.id)
+    (s.selectedElementIds.has(element.id) || s.groupDrag.childIds.has(element.id))
       ? s.groupDrag.dx
       : 0
   );
   const groupDragDy = useCanvasStore((s) =>
     s.groupDrag &&
     s.groupDrag.draggedId !== element.id &&
-    s.selectedElementIds.has(element.id)
+    (s.selectedElementIds.has(element.id) || s.groupDrag.childIds.has(element.id))
       ? s.groupDrag.dy
       : 0
   );
@@ -191,30 +197,34 @@ export function InteractiveShape({
       onDblClick={onDblClick ? () => onDblClick(element.id) : undefined}
       onDblTap={onDblClick ? () => onDblClick(element.id) : undefined}
       onDragStart={(e) => {
+        // Auto-select the dragged element if it's not already selected,
+        // so stale selections don't get affected by groupDragDx/Dy.
+        const currentSelection = useCanvasStore.getState().selectedElementIds;
+        if (!currentSelection.has(element.id)) {
+          onSelect(element.id, false);
+        }
         // Group position is center due to offset, convert back to top-left for tracking
         const topLeftX = e.target.x() - element.width / 2;
         const topLeftY = e.target.y() - element.height / 2;
-        startGroupDrag(element.id, topLeftX, topLeftY);
+        const childIds = getDragChildIds?.() ?? [];
+        startGroupDrag(element.id, topLeftX, topLeftY, childIds);
         onDragStart?.(element.id);
       }}
       onDragMove={(e) => {
+        const topLeftX = e.target.x() - element.width / 2;
+        const topLeftY = e.target.y() - element.height / 2;
         const groupDrag = useCanvasStore.getState().groupDrag;
         if (groupDrag && groupDrag.draggedId === element.id) {
-          const topLeftX = e.target.x() - element.width / 2;
-          const topLeftY = e.target.y() - element.height / 2;
           const dx = topLeftX - groupDrag.startX;
           const dy = topLeftY - groupDrag.startY;
           updateGroupDrag(dx, dy);
+        } else {
+          onDragMove?.(element.id, topLeftX, topLeftY);
         }
+        onDragPositionUpdate?.(topLeftX, topLeftY);
       }}
       onDragEnd={(e) => {
-        const delta = endGroupDrag();
-        if (delta) {
-          // Set Group position back to center of final position
-          e.target.x(element.x + delta.dx + element.width / 2);
-          e.target.y(element.y + delta.dy + element.height / 2);
-        }
-        // Convert Group center position back to top-left for Yjs storage
+        endGroupDrag();
         const finalTopLeftX = e.target.x() - element.width / 2;
         const finalTopLeftY = e.target.y() - element.height / 2;
         onDragEnd(element.id, finalTopLeftX, finalTopLeftY);

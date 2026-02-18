@@ -1,11 +1,11 @@
 "use client";
 
-import { Circle, Copy, Minus, MousePointer2, Square, StickyNote, Trash2, Type } from "lucide-react";
+import { ArrowRight, Circle, Copy, LayoutGrid, Minus, MousePointer2, Square, StickyNote, Trash2, Type } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
-export type ActiveTool = "pointer" | "sticky-note" | "rectangle" | "circle" | "line" | "text";
+export type ActiveTool = "pointer" | "sticky-note" | "rectangle" | "circle" | "line" | "text" | "frame" | "connector";
 
 type ToolbarProps = {
   activeTool: ActiveTool;
@@ -22,11 +22,12 @@ const tools: { id: ActiveTool; icon: typeof MousePointer2; label: string }[] = [
   { id: "circle", icon: Circle, label: "Circle" },
   { id: "line", icon: Minus, label: "Line" },
   { id: "text", icon: Type, label: "Text" },
+  { id: "frame", icon: LayoutGrid, label: "Frame" },
+  { id: "connector", icon: ArrowRight, label: "Connector" },
 ];
 
 export function Toolbar({ activeTool, onToolChange, onDelete, onDuplicate, hasSelection }: ToolbarProps) {
   return (
-    <TooltipProvider delayDuration={200}>
       <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1 bg-[#1a1a1a] border border-[#2a2a2a] rounded-xl px-2 py-1.5 shadow-lg">
         {tools.map((tool) => {
           const Icon = tool.icon;
@@ -83,6 +84,5 @@ export function Toolbar({ activeTool, onToolChange, onDelete, onDuplicate, hasSe
           </TooltipContent>
         </Tooltip>
       </div>
-    </TooltipProvider>
   );
 }

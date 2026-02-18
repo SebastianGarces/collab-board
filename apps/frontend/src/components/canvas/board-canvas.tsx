@@ -1,11 +1,11 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Layer, Rect, Stage } from "react-konva";
+import { Circle as KonvaCircle, Layer, Rect, Stage } from "react-konva";
 
-import type { BoardElement } from "@collab/shared/collab";
+import type { BoardElement, ConnectorElement, FrameElement } from "@collab/shared/collab";
 
-import { getElementAABB } from "@/lib/element-utils";
+import { findFrameAtPoint, getElementAABB, getFrameChildIds } from "@/lib/element-utils";
 import { useCanvasStore } from "@/stores/canvas-store";
 import { InteractiveShape } from "./interactive-shape";
 import { StickyNote } from "./sticky-note";
@@ -14,6 +14,10 @@ import { CircleContent } from "./circle-element";
 import { LineContent } from "./line-element";
 import { LineEndpointHandles } from "./line-endpoint-handles";
 import { TextContent } from "./text-element";
+import { FrameContent } from "./frame-element";
+import { ConnectorContent } from "./connector-element";
+import { ConnectorEndpointHandles } from "./connector-endpoint-handles";
+import { ConnectorMidpointHandles } from "./connector-midpoint-handles";
 import type { ElementBox } from "./shape-transform";
 
 import type { RotationCursorState } from "./interactive-shape";
@@ -25,6 +29,7 @@ type BoardCanvasProps = {
   activeTool?: string;
   onSelectElement?: (id: string, shiftKey: boolean) => void;
   onDragElementStart?: (id: string) => void;
+  onDragElementMove?: (id: string, x: number, y: number) => void;
   onDragElement?: (id: string, x: number, y: number) => void;
   onDragSelectedElements?: (deltaX: number, deltaY: number) => void;
   onResizeElement?: (id: string, box: ElementBox) => void;
@@ -33,11 +38,20 @@ type BoardCanvasProps = {
   onDblClickElement?: (id: string) => void;
   onLineEndpointDrag?: (id: string, endpointIndex: number, worldX: number, worldY: number) => void;
   onLineEndpointDragEnd?: (id: string, endpointIndex: number, worldX: number, worldY: number) => void;
+  onConnectorEndpointDrag?: (id: string, endpoint: "from" | "to", worldX: number, worldY: number) => void;
+  onConnectorEndpointDragEnd?: (id: string, endpoint: "from" | "to", worldX: number, worldY: number) => void;
+  onConnectorMidpointDrag?: (id: string, segmentIndex: number, worldX: number, worldY: number) => void;
+  onConnectorMidpointDragEnd?: (id: string, segmentIndex: number, worldX: number, worldY: number) => void;
+  onConnectorLabelClick?: (id: string) => void;
   onStagePointerDown?: (worldX: number, worldY: number) => void;
   onStagePointerMove?: (worldX: number, worldY: number) => void;
   onStagePointerUp?: () => void;
   onMarqueeSelect?: (ids: string[]) => void;
   marqueeRect?: { x: number; y: number; width: number; height: number } | null;
+  editingElementId?: string | null;
+  connectorSnapAnchors?: { x: number; y: number }[];
+  connectorSnapTarget?: { x: number; y: number } | null;
+  getFrameChildIdsFn?: (frameId: string) => string[];
 };
 
 export function BoardCanvas({
@@ -47,6 +61,7 @@ export function BoardCanvas({
   activeTool = "pointer",
   onSelectElement,
   onDragElementStart,
+  onDragElementMove,
   onDragElement,
   onDragSelectedElements,
   onResizeElement,
@@ -55,16 +70,27 @@ export function BoardCanvas({
   onDblClickElement,
   onLineEndpointDrag,
   onLineEndpointDragEnd,
+  onConnectorEndpointDrag,
+  onConnectorEndpointDragEnd,
+  onConnectorMidpointDrag,
+  onConnectorMidpointDragEnd,
+  onConnectorLabelClick,
   onStagePointerDown,
   onStagePointerMove,
   onStagePointerUp,
   marqueeRect = null,
+  editingElementId = null,
+  connectorSnapAnchors = [],
+  connectorSnapTarget = null,
+  getFrameChildIdsFn,
 }: BoardCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ width: 0, height: 0 });
 
   const selectedElementIds = useCanvasStore((s) => s.selectedElementIds);
   const groupDrag = useCanvasStore((s) => s.groupDrag);
+  const dropTargetFrameId = useCanvasStore((s) => s.dropTargetFrameId);
+  const setDropTargetFrameId = useCanvasStore((s) => s.setDropTargetFrameId);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -82,6 +108,11 @@ export function BoardCanvas({
   }, []);
 
   const isMultiSelect = selectedElementIds.size > 1;
+
+  const frameElements = useMemo(
+    () => elements.filter((e) => e.type === "frame") as FrameElement[],
+    [elements]
+  );
 
   const groupBounds = useMemo(() => {
     if (!isMultiSelect) return null;
@@ -107,6 +138,36 @@ export function BoardCanvas({
     return { x: minX - 4, y: minY - 4, width: maxX - minX + 8, height: maxY - minY + 8 };
   }, [isMultiSelect, elements, selectedElementIds, groupDrag]);
 
+  // Sort elements: frames first (behind), then regular shapes, then connectors on top.
+  // Connectors render above shapes so they remain visible over the objects they connect.
+  // Also filter out children of hidden frames.
+  const sortedElements = useMemo(() => {
+    const frames: BoardElement[] = [];
+    const connectors: BoardElement[] = [];
+    const nonFrames: BoardElement[] = [];
+    for (const el of elements) {
+      if (el.type === "frame") {
+        frames.push(el);
+      } else if (el.type === "connector") {
+        connectors.push(el);
+      } else {
+        nonFrames.push(el);
+      }
+    }
+
+    // Compute hidden child IDs using explicit frameId membership
+    const hiddenIds = new Set<string>();
+    for (const f of frames) {
+      if ((f as FrameElement).hidden) {
+        const children = getFrameChildIdsFn ? getFrameChildIdsFn(f.id) : getFrameChildIds(f.id, elements);
+        for (const id of children) hiddenIds.add(id);
+      }
+    }
+
+    const visibleNonFrames = nonFrames.filter((el) => !hiddenIds.has(el.id));
+    return [...frames, ...visibleNonFrames, ...connectors];
+  }, [elements, getFrameChildIdsFn]);
+
   const isPointerMode = activeTool === "pointer";
   const draggable = isPointerMode;
 
@@ -115,6 +176,7 @@ export function BoardCanvas({
   };
 
   const handleMultiDragEnd = (draggedId: string, newX: number, newY: number) => {
+    setDropTargetFrameId(null);
     const el = elements.find((e) => e.id === draggedId);
     if (!el) return;
     const deltaX = newX - el.x;
@@ -196,11 +258,13 @@ export function BoardCanvas({
               );
             })}
 
-            {/* Real board elements */}
-            {elements.map((el) => {
+            {/* Real board elements (frames first, then connectors, then non-frames; hidden children filtered out) */}
+            {sortedElements.map((el) => {
               const isLine = el.type === "line";
-              const resizable = !isLine;
-              const editable = el.type === "sticky-note" || el.type === "text";
+              const isConnector = el.type === "connector";
+              const isFrame = el.type === "frame";
+              const resizable = !isLine && !isConnector;
+              const editable = el.type === "sticky-note" || el.type === "text" || isFrame;
               const isSelected = selectedElementIds.has(el.id);
               return (
                 <InteractiveShape
@@ -208,9 +272,10 @@ export function BoardCanvas({
                   element={el}
                   isSelected={isSelected}
                   multiSelected={isSelected && isMultiSelect}
-                  draggable={draggable}
+                  draggable={draggable && !isConnector}
                   onSelect={handleSelect}
                   onDragStart={onDragElementStart}
+                  onDragMove={onDragElementMove}
                   onDragEnd={handleMultiDragEnd}
                   resizable={resizable}
                   onResize={resizable ? handleResize : undefined}
@@ -218,13 +283,46 @@ export function BoardCanvas({
                   onRotateCursorChange={resizable ? onRotateCursorChange : undefined}
                   zoomScale={camera.scale}
                   onDblClick={editable ? handleDblClick : undefined}
-                  hideSelectionOutline={isLine}
+                  hideSelectionOutline={isLine || isConnector}
+                  getDragChildIds={
+                    el.type === "frame"
+                      ? () => (getFrameChildIdsFn ? getFrameChildIdsFn(el.id) : getFrameChildIds(el.id, elements))
+                      : undefined
+                  }
+                  onDragPositionUpdate={
+                    !isFrame
+                      ? (x, y) => {
+                          const cx = x + el.width / 2;
+                          const cy = y + el.height / 2;
+                          const target = findFrameAtPoint(cx, cy, frameElements);
+                          setDropTargetFrameId(target);
+                        }
+                      : undefined
+                  }
                 >
                   {el.type === "sticky-note" && <StickyNote element={el} />}
                   {el.type === "rectangle" && <RectangleContent element={el} />}
                   {el.type === "circle" && <CircleContent element={el} />}
                   {el.type === "line" && <LineContent element={el} />}
                   {el.type === "text" && <TextContent element={el} />}
+                  {el.type === "frame" && (
+                    <FrameContent
+                      element={el}
+                      isEditing={el.id === editingElementId}
+                      isDropTarget={dropTargetFrameId === el.id}
+                    />
+                  )}
+                  {isConnector && el.type === "connector" && (
+                    <ConnectorContent
+                      element={el}
+                      elements={elements}
+                      onLabelClick={
+                        isSelected && el.labelText.trim() !== ""
+                          ? () => onConnectorLabelClick?.(el.id)
+                          : undefined
+                      }
+                    />
+                  )}
                   {isLine && isSelected && el.type === "line" && (
                     <LineEndpointHandles
                       points={el.points}
@@ -236,6 +334,32 @@ export function BoardCanvas({
                         onLineEndpointDragEnd?.(el.id, idx, wx, wy)
                       }
                     />
+                  )}
+                  {isConnector && isSelected && el.type === "connector" && (
+                    <>
+                      <ConnectorEndpointHandles
+                        element={el}
+                        elements={elements}
+                        zoomScale={camera.scale}
+                        onEndpointDrag={(endpoint, wx, wy) =>
+                          onConnectorEndpointDrag?.(el.id, endpoint, wx, wy)
+                        }
+                        onEndpointDragEnd={(endpoint, wx, wy) =>
+                          onConnectorEndpointDragEnd?.(el.id, endpoint, wx, wy)
+                        }
+                      />
+                      <ConnectorMidpointHandles
+                        element={el}
+                        elements={elements}
+                        zoomScale={camera.scale}
+                        onMidpointDrag={(segIdx, wx, wy) =>
+                          onConnectorMidpointDrag?.(el.id, segIdx, wx, wy)
+                        }
+                        onMidpointDragEnd={(segIdx, wx, wy) =>
+                          onConnectorMidpointDragEnd?.(el.id, segIdx, wx, wy)
+                        }
+                      />
+                    </>
                   )}
                 </InteractiveShape>
               );
@@ -252,6 +376,34 @@ export function BoardCanvas({
                 strokeWidth={2 / camera.scale}
                 cornerRadius={6 / camera.scale}
                 dash={[6 / camera.scale, 3 / camera.scale]}
+                listening={false}
+              />
+            )}
+
+            {/* Connector snap anchor points */}
+            {connectorSnapAnchors.map((anchor, i) => (
+              <KonvaCircle
+                key={`snap-anchor-${i}`}
+                x={anchor.x}
+                y={anchor.y}
+                radius={7 / camera.scale}
+                fill="white"
+                stroke="#60a5fa"
+                strokeWidth={2 / camera.scale}
+                opacity={1}
+                listening={false}
+              />
+            ))}
+
+            {/* Active snap target highlight */}
+            {connectorSnapTarget && (
+              <KonvaCircle
+                x={connectorSnapTarget.x}
+                y={connectorSnapTarget.y}
+                radius={10 / camera.scale}
+                fill="rgba(96, 165, 250, 0.4)"
+                stroke="#2563eb"
+                strokeWidth={2.5 / camera.scale}
                 listening={false}
               />
             )}

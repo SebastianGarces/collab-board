@@ -1,5 +1,5 @@
+import type { BoardElement, FrameElement } from "@collab/shared/collab";
 import * as Y from "yjs";
-import type { BoardElement } from "@collab/shared/collab";
 
 /**
  * Clone an element from Yjs with a new ID and optional position offset
@@ -40,14 +40,16 @@ export function cloneElementFromYjs(
  * Serialize a BoardElement to a plain object for clipboard
  */
 export function serializeElement(element: BoardElement): Record<string, unknown> {
-  // Return a plain object copy of all properties
+  // Return a plain object copy of all properties (id included for frameId remapping on paste)
   return {
+    id: element.id,
     type: element.type,
     x: element.x,
     y: element.y,
     width: element.width,
     height: element.height,
     rotation: element.rotation,
+    frameId: element.frameId ?? null,
     ...(element.type === "sticky-note" && {
       text: element.text,
       color: element.color,
@@ -72,6 +74,13 @@ export function serializeElement(element: BoardElement): Record<string, unknown>
       fontSize: element.fontSize,
       fontFamily: element.fontFamily,
       fill: element.fill,
+    }),
+    ...(element.type === "frame" && {
+      title: element.title,
+      fill: element.fill,
+      stroke: element.stroke,
+      strokeStyle: element.strokeStyle,
+      hidden: element.hidden,
     }),
   };
 }
@@ -132,6 +141,46 @@ export function getElementAABB(el: {
     maxX: cx + rotatedHW,
     maxY: cy + rotatedHH,
   };
+}
+
+/**
+ * Get IDs of elements explicitly assigned to a frame via frameId.
+ */
+export function getFrameChildIds(
+  frameId: string,
+  elements: BoardElement[]
+): string[] {
+  return elements
+    .filter((el) => el.frameId === frameId)
+    .map((el) => el.id);
+}
+
+/**
+ * Find the frame whose bounds contain the given point.
+ * If multiple frames overlap, returns the smallest one (by area).
+ */
+export function findFrameAtPoint(
+  cx: number,
+  cy: number,
+  frames: FrameElement[]
+): string | null {
+  let bestId: string | null = null;
+  let bestArea = Infinity;
+  for (const f of frames) {
+    if (
+      cx >= f.x &&
+      cx <= f.x + f.width &&
+      cy >= f.y &&
+      cy <= f.y + f.height
+    ) {
+      const area = f.width * f.height;
+      if (area < bestArea) {
+        bestArea = area;
+        bestId = f.id;
+      }
+    }
+  }
+  return bestId;
 }
 
 /**

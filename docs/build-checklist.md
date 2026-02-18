@@ -29,11 +29,11 @@ Layer 0 (no blockers - can start now)
 ├── Rotate transform
 └── Input validation / XSS sanitization
 
-Layer 1 (depends on Layer 0)
-├── Connectors ← needs shapes to connect to
-├── Frames ← benefits from multi-select for grouping
-├── Duplicate operation ← benefits from multi-select
-└── Copy/paste ← benefits from multi-select
+Layer 1 (depends on Layer 0) ✓ ALL DONE
+├── Connectors ← DONE
+├── Frames ← DONE
+├── Duplicate operation ← DONE
+└── Copy/paste ← DONE
 
 Layer 2 (depends on Layer 1)
 ├── AI Agent: tool schema + OpenAI integration ← needs board features to manipulate
@@ -78,9 +78,9 @@ Layer 4 (final — depends on everything above)
 | 3 | Shapes — Rectangle | [x] Done | Drag-to-draw, resize handles, fill/stroke |
 | 4 | Shapes — Circle | [x] Done | Ellipse via Konva, drag-to-draw, resize handles, fill/stroke |
 | 5 | Shapes — Line | [x] Done | Line via Konva, drag-to-draw, configurable stroke |
-| 6 | Connectors (lines/arrows between objects) | [ ] Not done | No connector type, no endpoint snapping logic |
+| 6 | Connectors (lines/arrows between objects) | [x] Done | Connector element with 3 routing styles (straight/curved/orthogonal), arrowheads (none/arrow/diamond), dash styles, endpoint snapping to shapes, reactive position tracking, text labels with formatting, composable toolbar |
 | 7 | Standalone text elements | [x] Done | Text element with double-click inline editing, configurable font size |
-| 8 | Frames (group + organize areas) | [ ] Not done | No frame type, no child containment logic |
+| 8 | Frames (group + organize areas) | [x] Done | Frame element with title label, bg/border color, solid/dashed/none border, hide/show toggle, child containment on move |
 | 9 | Transforms — Move | [x] Done | Drag via Konva + Yjs transact |
 | 10 | Transforms — Resize | [x] Done | 8-point handles, min size enforcement |
 | 11 | Transforms — Rotate | [x] Done | Rotation zones outside corners, center-pivot, Shift-snap to 15°, custom cursor with Lucide icons |
@@ -126,7 +126,7 @@ Layer 4 (final — depends on everything above)
 | 2 | Tool: `createStickyNote(text, x, y, color)` | [ ] Not done | |
 | 3 | Tool: `createShape(type, x, y, w, h, color)` | [ ] Not done | |
 | 4 | Tool: `createFrame(title, x, y, w, h)` | [ ] Not done | Depends on Frame element type |
-| 5 | Tool: `createConnector(fromId, toId, style)` | [ ] Not done | Depends on Connector element type |
+| 5 | Tool: `createConnector(fromId, toId, style)` | [ ] Not done | Connector element type now available |
 | 6 | Tool: `moveObject(objectId, x, y)` | [ ] Not done | |
 | 7 | Tool: `resizeObject(objectId, w, h)` | [ ] Not done | |
 | 8 | Tool: `updateText(objectId, newText)` | [ ] Not done | |

@@ -54,6 +54,7 @@ export const board = pgTable("board", {
   id: text("id").primaryKey(),
   name: text("name").notNull().default("Untitled"),
   ownerId: text("owner_id").references(() => user.id, { onDelete: "set null" }),
+  isPublic: boolean("is_public").notNull().default(false),
   yjsStateB64: text("yjs_state_b64"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),

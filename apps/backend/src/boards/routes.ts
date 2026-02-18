@@ -27,6 +27,44 @@ export const boardRoutes = new Elysia({ name: "board-routes" })
 
     return { boards };
   })
+  .get("/api/boards/public", async ({ request, status }) => {
+    const session = await auth.api.getSession({ headers: request.headers });
+    if (!session) {
+      return status(401, { error: "Unauthorized" });
+    }
+
+    const boards = await db
+      .select({
+        id: board.id,
+        name: board.name,
+        ownerId: board.ownerId,
+        createdAt: board.createdAt,
+        updatedAt: board.updatedAt,
+      })
+      .from(board)
+      .where(eq(board.isPublic, true))
+      .orderBy(board.updatedAt);
+
+    return { boards };
+  })
+  .get("/api/boards/:id", async ({ request, params, status }) => {
+    const session = await auth.api.getSession({ headers: request.headers });
+    if (!session) {
+      return status(401, { error: "Unauthorized" });
+    }
+
+    const rows = await db
+      .select({ id: board.id, name: board.name })
+      .from(board)
+      .where(eq(board.id, params.id))
+      .limit(1);
+
+    if (!rows.length) {
+      return status(404, { error: "Not found" });
+    }
+
+    return { id: rows[0].id, name: rows[0].name };
+  })
   .post("/api/boards", async ({ request, status, body }) => {
     const session = await auth.api.getSession({ headers: request.headers });
     if (!session) {

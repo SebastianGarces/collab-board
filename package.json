@@ -22,7 +22,8 @@
     "db:recreate": "docker compose down && docker compose up -d --force-recreate postgres",
     "db:down": "docker compose down",
     "db:logs": "docker compose logs -f postgres",
-    "migrate": "bun run --env-file=.env --filter @collab/backend migrate"
+    "migrate": "bun run --env-file=.env --filter @collab/backend migrate",
+    "seed:public-board": "bun run --env-file=.env --filter @collab/backend seed:public-board"
   },
   "devDependencies": {
     "typescript": "^5.9.3"

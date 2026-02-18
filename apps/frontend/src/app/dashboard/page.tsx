@@ -1,6 +1,6 @@
 "use client";
 
-import { LayoutDashboard, LogOut, Pencil, Plus, Trash2 } from "lucide-react";
+import { Globe, LayoutDashboard, LogOut, Pencil, Plus, Trash2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 
@@ -38,6 +38,7 @@ export default function DashboardPage() {
   const router = useRouter();
   const { data: session, isPending } = authClient.useSession();
   const [boards, setBoards] = useState<Board[]>([]);
+  const [publicBoards, setPublicBoards] = useState<Board[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isCreating, setIsCreating] = useState(false);
   const [showCreateDialog, setShowCreateDialog] = useState(false);
@@ -56,12 +57,17 @@ export default function DashboardPage() {
 
   const fetchBoards = useCallback(async () => {
     try {
-      const res = await fetch(`${API_URL}/api/boards`, {
-        credentials: "include",
-      });
-      if (res.ok) {
-        const data = await res.json();
+      const [boardsRes, publicRes] = await Promise.all([
+        fetch(`${API_URL}/api/boards`, { credentials: "include" }),
+        fetch(`${API_URL}/api/boards/public`, { credentials: "include" }),
+      ]);
+      if (boardsRes.ok) {
+        const data = await boardsRes.json();
         setBoards(data.boards ?? []);
+      }
+      if (publicRes.ok) {
+        const data = await publicRes.json();
+        setPublicBoards(data.boards ?? []);
       }
     } catch {
       // silently fail — user will see empty state
@@ -198,6 +204,33 @@ export default function DashboardPage() {
 
       {/* Content */}
       <div className="mx-auto max-w-5xl px-6 py-8">
+        {/* Public Boards */}
+        {!isLoading && publicBoards.length > 0 && (
+          <div className="mb-10">
+            <div className="flex items-center gap-2 mb-4">
+              <Globe className="h-4 w-4 text-[#60a5fa]" />
+              <h2 className="text-xl font-semibold">Public Boards</h2>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              {publicBoards.map((b) => (
+                <Card
+                  key={b.id}
+                  className="cursor-pointer transition-colors hover:border-[#444] bg-[#1a1a1a] border-[#2a2a2a]"
+                  onClick={() => router.push(`/canvas/${b.id}`)}
+                >
+                  <CardHeader>
+                    <CardTitle className="truncate">{b.name}</CardTitle>
+                    <CardDescription>
+                      Updated {formatDate(b.updatedAt)}
+                    </CardDescription>
+                  </CardHeader>
+                </Card>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Your Boards */}
         <div className="flex items-center justify-between mb-6">
           <h2 className="text-xl font-semibold">Your Boards</h2>
           <Button onClick={openCreateDialog}>

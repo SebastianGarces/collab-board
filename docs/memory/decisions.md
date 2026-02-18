@@ -93,3 +93,12 @@ Append-only log. Never edit past entries. If a decision is superseded, add a new
 **Context:** Need UI components for toolbars, panels, dialogs, and AI chat that overlay the canvas without interfering with Konva rendering.
 **Decision:** shadcn/ui (Radix primitives, Tailwind CSS) for all non-canvas UI. Components are copy-paste owned, fully customizable. Dark theme by default.
 **Consequences:** No lock-in (you own the components). Overlay UI is pointer-events-none during canvas interaction. Tailwind utilities used throughout.
+
+---
+
+### ADR-010: Connector element with reference-based endpoints
+**Date:** 2026-02-17
+**Status:** accepted
+**Context:** Connectors need to link two shapes and follow them when moved. Unlike other elements that are fully positioned by x/y/width/height, connectors derive their visual path from endpoint positions which may be anchored to other elements.
+**Decision:** Store `fromId/toId` (attached element IDs) and `fromX/fromY/toX/toY` (absolute coordinates) on the connector. At render time, `resolveEndpoints()` recomputes anchor positions from connected shapes' bounding boxes. Path routing (straight/curved/orthogonal) is computed per-render via `computePath()`. The connector's `x/y/width/height` is the bounding box of the two endpoints, used only for selection hit testing and toolbar positioning. Connectors use `InteractiveShape` with `resizable={false}`, `draggable={false}`, and custom endpoint/midpoint handle components.
+**Consequences:** Connectors reactively follow connected shapes without explicit update logic. Endpoint snapping uses `findSnapTarget()` at drag-end to attach to nearby shapes. Selection toolbar has 3 states (default, has-label, editing-label) managed via `editingConnectorLabel` boolean in page component.

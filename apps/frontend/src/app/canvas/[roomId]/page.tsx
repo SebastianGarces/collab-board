@@ -1,35 +1,41 @@
 "use client";
 
+import { useHotkey } from "@tanstack/react-hotkeys";
+import { ArrowLeft } from "lucide-react";
+import dynamic from "next/dynamic";
+import Link from "next/link";
+import { useParams, useRouter } from "next/navigation";
 import type { PointerEvent as ReactPointerEvent, WheelEvent as ReactWheelEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useHotkey } from "@tanstack/react-hotkeys";
-import { useParams, useRouter } from "next/navigation";
-import Link from "next/link";
-import dynamic from "next/dynamic";
 import * as Y from "yjs";
 
-import type { PresenceState, BoardElement } from "@collab/shared/collab";
-import {
-  DEFAULT_FONT_FAMILY,
-  DEFAULT_STICKY_NOTE_FONT_SIZE,
-  DEFAULT_STICKY_NOTE_SIZE,
-  DEFAULT_TEXT_SIZE,
-  STICKY_NOTE_COLORS,
-} from "@collab/shared/collab";
-import { stripHtmlTags } from "@collab/shared/validation";
-import { cloneElementFromYjs, serializeElement, deserializeElement, getBoundingBox } from "@/lib/element-utils";
-import { authClient } from "@/lib/auth-client";
-import { type Camera, type ConnectionState, createCollabConnection } from "@/lib/collab";
-import { createPerfProbeCollector } from "@/lib/perf-probe";
-import { useYjsElements } from "@/hooks/use-yjs-elements";
-import { useCanvasStore } from "@/stores/canvas-store";
-import { Toolbar, type ActiveTool } from "@/components/board/toolbar";
 import { SelectionToolbar } from "@/components/board/selection-toolbar";
+import { Toolbar, type ActiveTool } from "@/components/board/toolbar";
+import { computePath, findNearbyAnchors, findSnapTarget, getPathMidpoint, isOrthogonalHorizontalFirst, resolveEndpoints, type Point } from "@/components/canvas/connector-utils";
 import {
   createBoxFromDrag,
   MIN_ELEMENT_SIZE,
   type ElementBox,
 } from "@/components/canvas/shape-transform";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useYjsElements } from "@/hooks/use-yjs-elements";
+import { authClient } from "@/lib/auth-client";
+import { createCollabConnection, type Camera, type ConnectionState } from "@/lib/collab";
+import { deserializeElement, findFrameAtPoint, getBoundingBox, serializeElement } from "@/lib/element-utils";
+import { createPerfProbeCollector } from "@/lib/perf-probe";
+import { useCanvasStore } from "@/stores/canvas-store";
+import type { BoardElement, FrameElement, PresenceState, PresenceUser } from "@collab/shared/collab";
+import {
+  DEFAULT_CONNECTOR_STROKE,
+  DEFAULT_CONNECTOR_STROKE_WIDTH,
+  DEFAULT_FONT_FAMILY,
+  DEFAULT_STICKY_NOTE_FONT_SIZE,
+  DEFAULT_STICKY_NOTE_SIZE,
+  DEFAULT_TEXT_SIZE,
+  STICKY_NOTE_COLORS
+} from "@collab/shared/collab";
+import { stripHtmlTags } from "@collab/shared/validation";
 
 const BoardCanvas = dynamic(
   () => import("@/components/canvas/board-canvas").then((m) => m.BoardCanvas),
@@ -49,7 +55,7 @@ type RemoteCursor = {
 
 type DrawingShapeState = {
   id: string;
-  tool: "rectangle" | "circle" | "line";
+  tool: "rectangle" | "circle" | "line" | "frame" | "connector";
   start: { x: number; y: number };
 };
 
@@ -79,7 +85,8 @@ export default function CanvasPage() {
   const { data: session, isPending } = authClient.useSession();
   const [camera, setCamera] = useState<Camera>({ x: 0, y: 0, scale: 1 });
   const [remoteCursors, setRemoteCursors] = useState<RemoteCursor[]>([]);
-  const [peerCount, setPeerCount] = useState(0);
+  const [onlineUsers, setOnlineUsers] = useState<PresenceUser[]>([]);
+  const [boardName, setBoardName] = useState("");
   const [connectionState, setConnectionState] = useState<ConnectionState>("connecting");
   const [isPanning, setIsPanning] = useState(false);
   const [isSpacebarPressed, setIsSpacebarPressed] = useState(false);
@@ -90,6 +97,7 @@ export default function CanvasPage() {
   const setSelectedElementIds = useCanvasStore((s) => s.setSelectedElementIds);
   const clearSelection = useCanvasStore((s) => s.clearSelection);
   const [editingElementId, setEditingElementId] = useState<string | null>(null);
+  const [editingConnectorLabel, setEditingConnectorLabel] = useState(false);
   const [isDraggingElement, setIsDraggingElement] = useState(false);
   const [editText, setEditText] = useState("");
   const surfaceRef = useRef<HTMLDivElement | null>(null);
@@ -105,6 +113,8 @@ export default function CanvasPage() {
   const marqueeStartRef = useRef<{ x: number; y: number } | null>(null);
   const [rotationCursor, setRotationCursor] = useState<{ corner: "nw" | "ne" | "se" | "sw"; elementRotation: number } | null>(null);
   const [pointerPosition, setPointerPosition] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const [connectorSnapAnchors, setConnectorSnapAnchors] = useState<Point[]>([]);
+  const [connectorSnapTarget, setConnectorSnapTarget] = useState<Point | null>(null);
 
   const perfEnabled =
     process.env.NEXT_PUBLIC_ENABLE_PERF_PROBES === "1" ||
@@ -130,6 +140,16 @@ export default function CanvasPage() {
   }, [isPending, session, router]);
 
   useEffect(() => {
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3000";
+    fetch(`${apiUrl}/api/boards/${roomId}`, { credentials: "include" })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (data?.name) setBoardName(data.name);
+      })
+      .catch(() => {});
+  }, [roomId]);
+
+  useEffect(() => {
     if (!currentUser) return;
 
     const connection = createCollabConnection({
@@ -137,13 +157,16 @@ export default function CanvasPage() {
       user: currentUser,
       onStatesChange(states, localClientId) {
         const cursors: RemoteCursor[] = [];
+        const users: PresenceUser[] = [];
         states.forEach((state, clientId) => {
+          if (!state?.user) return;
+          users.push(state.user);
           if (clientId === localClientId) return;
-          if (!state?.user || !state.cursor) return;
+          if (!state.cursor) return;
           cursors.push({ clientId, cursor: state.cursor, user: state.user });
         });
         setRemoteCursors(cursors);
-        setPeerCount(states.size);
+        setOnlineUsers(users);
       },
       onConnectionStateChange: setConnectionState,
       onPerfProbe(probe) {
@@ -164,6 +187,8 @@ export default function CanvasPage() {
   }, [currentUser, roomId, perfEnabled]);
 
   const elements = useYjsElements(yjsDoc);
+  const elementsRef = useRef(elements);
+  elementsRef.current = elements;
 
   useEffect(() => {
     if (!perfEnabled) return;
@@ -237,6 +262,20 @@ export default function CanvasPage() {
 
   // --- Element operations ---
 
+  /** Assign frameId to a newly created element based on its center position. */
+  const assignFrameIdToElement = useCallback(
+    (elementMap: Y.Map<unknown>, centerX: number, centerY: number) => {
+      const frames = elementsRef.current.filter(
+        (e) => e.type === "frame"
+      ) as FrameElement[];
+      const targetFrameId = findFrameAtPoint(centerX, centerY, frames);
+      if (targetFrameId) {
+        elementMap.set("frameId", targetFrameId);
+      }
+    },
+    []
+  );
+
   const createStickyNote = useCallback(
     (worldX: number, worldY: number) => {
       const doc = docRef.current;
@@ -256,12 +295,13 @@ export default function CanvasPage() {
       elementMap.set("color", color);
       elementMap.set("fontSize", DEFAULT_STICKY_NOTE_FONT_SIZE);
       elementMap.set("fontFamily", DEFAULT_FONT_FAMILY);
+      assignFrameIdToElement(elementMap, worldX, worldY);
 
       elementsMap.set(id, elementMap);
       setSelectedElementIds(new Set([id]));
       setActiveTool("pointer");
     },
-    []
+    [assignFrameIdToElement]
   );
 
   const createRectangleDraft = useCallback(
@@ -355,6 +395,7 @@ export default function CanvasPage() {
       elementMap.set("fontSize", 18);
       elementMap.set("fontFamily", DEFAULT_FONT_FAMILY);
       elementMap.set("fill", "#f8fafc");
+      assignFrameIdToElement(elementMap, worldX, worldY);
 
       elementsMap.set(id, elementMap);
       setSelectedElementIds(new Set([id]));
@@ -362,8 +403,205 @@ export default function CanvasPage() {
       setEditingElementId(id);
       setEditText("");
     },
+    [assignFrameIdToElement]
+  );
+
+  const createFrameDraft = useCallback(
+    (worldX: number, worldY: number) => {
+      const doc = docRef.current;
+      if (!doc) return null;
+      const elementsMap = doc.getMap("elements");
+      const id = generateId();
+      const elementMap = new Y.Map<unknown>();
+
+      // Count existing frames with default "Frame N" names to determine next number
+      const framePattern = /^Frame (\d+)$/;
+      let maxFrameNum = 0;
+      elementsMap.forEach((val) => {
+        const m = val as Y.Map<unknown> | undefined;
+        if (m && typeof m.get === "function" && m.get("type") === "frame") {
+          const title = m.get("title") as string | undefined;
+          if (title) {
+            const match = title.match(framePattern);
+            if (match) {
+              maxFrameNum = Math.max(maxFrameNum, parseInt(match[1], 10));
+            }
+          }
+        }
+      });
+
+      elementMap.set("type", "frame");
+      elementMap.set("id", id);
+      elementMap.set("x", worldX);
+      elementMap.set("y", worldY);
+      elementMap.set("width", MIN_ELEMENT_SIZE);
+      elementMap.set("height", MIN_ELEMENT_SIZE);
+      elementMap.set("title", `Frame ${maxFrameNum + 1}`);
+      elementMap.set("fill", "#f5f5f5");
+      elementMap.set("stroke", "#d4d4d4");
+      elementMap.set("strokeStyle", "solid");
+      elementMap.set("hidden", false);
+
+      elementsMap.set(id, elementMap);
+      setSelectedElementIds(new Set([id]));
+      return id;
+    },
     []
   );
+
+  const createConnectorDraft = useCallback(
+    (worldX: number, worldY: number) => {
+      const doc = docRef.current;
+      if (!doc) return null;
+      const elementsMap = doc.getMap("elements");
+      const id = generateId();
+      const elementMap = new Y.Map<unknown>();
+
+      elementMap.set("type", "connector");
+      elementMap.set("id", id);
+      elementMap.set("x", worldX);
+      elementMap.set("y", worldY);
+      elementMap.set("width", 0);
+      elementMap.set("height", 0);
+      elementMap.set("fromId", "");
+      elementMap.set("toId", "");
+      elementMap.set("fromAnchor", null);
+      elementMap.set("toAnchor", null);
+      elementMap.set("fromX", worldX);
+      elementMap.set("fromY", worldY);
+      elementMap.set("toX", worldX);
+      elementMap.set("toY", worldY);
+      elementMap.set("routingStyle", "orthogonal");
+      elementMap.set("startArrow", "none");
+      elementMap.set("endArrow", "none");
+      elementMap.set("stroke", DEFAULT_CONNECTOR_STROKE);
+      elementMap.set("strokeWidth", DEFAULT_CONNECTOR_STROKE_WIDTH);
+      elementMap.set("dashStyle", "solid");
+      elementMap.set("labelText", "");
+      elementMap.set("labelFontSize", 14);
+      elementMap.set("labelFontFamily", DEFAULT_FONT_FAMILY);
+      elementMap.set("labelFill", "#f8fafc");
+      elementMap.set("labelBold", false);
+      elementMap.set("labelStrikethrough", false);
+
+      elementsMap.set(id, elementMap);
+      setSelectedElementIds(new Set([id]));
+      return id;
+    },
+    []
+  );
+
+  const moveConnectorEndpoint = useCallback(
+    (id: string, endpoint: "from" | "to", worldX: number, worldY: number) => {
+      const doc = docRef.current;
+      if (!doc) return;
+      const elementsMap = doc.getMap("elements");
+      const elementMap = elementsMap.get(id) as Y.Map<unknown> | undefined;
+      if (!elementMap) return;
+
+      const xKey = endpoint === "from" ? "fromX" : "toX";
+      const yKey = endpoint === "from" ? "fromY" : "toY";
+      const idKey = endpoint === "from" ? "fromId" : "toId";
+      const anchorKey = endpoint === "from" ? "fromAnchor" : "toAnchor";
+
+      doc.transact(() => {
+        elementMap.set(xKey, worldX);
+        elementMap.set(yKey, worldY);
+        elementMap.set(idKey, "");
+        elementMap.set(anchorKey, null);
+
+        // Update bounding box
+        const fx = endpoint === "from" ? worldX : (elementMap.get("fromX") as number) ?? 0;
+        const fy = endpoint === "from" ? worldY : (elementMap.get("fromY") as number) ?? 0;
+        const tx = endpoint === "to" ? worldX : (elementMap.get("toX") as number) ?? 0;
+        const ty = endpoint === "to" ? worldY : (elementMap.get("toY") as number) ?? 0;
+        elementMap.set("x", Math.min(fx, tx));
+        elementMap.set("y", Math.min(fy, ty));
+        elementMap.set("width", Math.max(Math.abs(tx - fx), 1));
+        elementMap.set("height", Math.max(Math.abs(ty - fy), 1));
+      });
+    },
+    []
+  );
+
+  const finalizeConnectorEndpoint = useCallback(
+    (id: string, endpoint: "from" | "to", worldX: number, worldY: number) => {
+      const doc = docRef.current;
+      if (!doc) return;
+      const elementsMap = doc.getMap("elements");
+      const elementMap = elementsMap.get(id) as Y.Map<unknown> | undefined;
+      if (!elementMap) return;
+
+      const excludeIds = new Set([id]);
+      const snap = findSnapTarget({ x: worldX, y: worldY }, elements, excludeIds);
+
+      const xKey = endpoint === "from" ? "fromX" : "toX";
+      const yKey = endpoint === "from" ? "fromY" : "toY";
+      const idKey = endpoint === "from" ? "fromId" : "toId";
+      const anchorKey = endpoint === "from" ? "fromAnchor" : "toAnchor";
+
+      doc.transact(() => {
+        if (snap) {
+          elementMap.set(xKey, snap.anchor.x);
+          elementMap.set(yKey, snap.anchor.y);
+          elementMap.set(idKey, snap.element.id);
+          elementMap.set(anchorKey, snap.anchorIndex);
+        } else {
+          elementMap.set(xKey, worldX);
+          elementMap.set(yKey, worldY);
+          elementMap.set(idKey, "");
+          elementMap.set(anchorKey, null);
+        }
+
+        // Update bounding box
+        const fx = endpoint === "from" ? (snap ? snap.anchor.x : worldX) : (elementMap.get("fromX") as number) ?? 0;
+        const fy = endpoint === "from" ? (snap ? snap.anchor.y : worldY) : (elementMap.get("fromY") as number) ?? 0;
+        const tx = endpoint === "to" ? (snap ? snap.anchor.x : worldX) : (elementMap.get("toX") as number) ?? 0;
+        const ty = endpoint === "to" ? (snap ? snap.anchor.y : worldY) : (elementMap.get("toY") as number) ?? 0;
+        elementMap.set("x", Math.min(fx, tx));
+        elementMap.set("y", Math.min(fy, ty));
+        elementMap.set("width", Math.max(Math.abs(tx - fx), 1));
+        elementMap.set("height", Math.max(Math.abs(ty - fy), 1));
+      });
+    },
+    [elements]
+  );
+
+  const moveConnectorMidpoint = useCallback(
+    (id: string, _segmentIndex: number, worldX: number, worldY: number) => {
+      const doc = docRef.current;
+      if (!doc) return;
+      const elementsMap = doc.getMap("elements");
+      const elementMap = elementsMap.get(id) as Y.Map<unknown> | undefined;
+      if (!elementMap) return;
+
+      const el = elements.find((e) => e.id === id);
+      if (!el || el.type !== "connector") return;
+
+      const resolved = resolveEndpoints(el, elements);
+      const hFirst = isOrthogonalHorizontalFirst(resolved.from, resolved.to, el.fromAnchor, el.toAnchor);
+
+      doc.transact(() => {
+        elementMap.set("elbowMidpoint", hFirst ? worldX : worldY);
+      });
+    },
+    [elements]
+  );
+
+  // Read frame children directly from Yjs (avoids stale React state issues)
+  const getFrameChildIdsFromYjs = useCallback((frameId: string): string[] => {
+    const doc = docRef.current;
+    if (!doc) return [];
+    const elementsMap = doc.getMap("elements");
+    const ids: string[] = [];
+    elementsMap.forEach((val, key) => {
+      const m = val as Y.Map<unknown>;
+      if (m && typeof m.get === "function" && m.get("frameId") === frameId) {
+        ids.push(key);
+      }
+    });
+    return ids;
+  }, []);
 
   const moveElement = useCallback((id: string, x: number, y: number) => {
     const doc = docRef.current;
@@ -371,10 +609,69 @@ export default function CanvasPage() {
     const elementsMap = doc.getMap("elements");
     const elementMap = elementsMap.get(id) as Y.Map<unknown> | undefined;
     if (!elementMap) return;
-    doc.transact(() => {
-      elementMap.set("x", x);
-      elementMap.set("y", y);
-    });
+
+    const elType = elementMap.get("type") as string | undefined;
+    if (elType === "frame") {
+      const oldX = (elementMap.get("x") as number) ?? 0;
+      const oldY = (elementMap.get("y") as number) ?? 0;
+      const deltaX = x - oldX;
+      const deltaY = y - oldY;
+
+      // Read children directly from Yjs (avoids stale React state)
+      const childIds: string[] = [];
+      elementsMap.forEach((val, key) => {
+        const m = val as Y.Map<unknown>;
+        if (m && typeof m.get === "function" && m.get("frameId") === id) {
+          childIds.push(key);
+        }
+      });
+
+      doc.transact(() => {
+        elementMap.set("x", x);
+        elementMap.set("y", y);
+        for (const childId of childIds) {
+          const childMap = elementsMap.get(childId) as Y.Map<unknown> | undefined;
+          if (!childMap) continue;
+          const cx = (childMap.get("x") as number) ?? 0;
+          const cy = (childMap.get("y") as number) ?? 0;
+          childMap.set("x", cx + deltaX);
+          childMap.set("y", cy + deltaY);
+        }
+      });
+    } else {
+      const w = (elementMap.get("width") as number) ?? 0;
+      const h = (elementMap.get("height") as number) ?? 0;
+      const newCx = x + w / 2;
+      const newCy = y + h / 2;
+
+      // Build frame list from Yjs for drop-target check
+      const frames: FrameElement[] = [];
+      elementsMap.forEach((val, key) => {
+        const m = val as Y.Map<unknown>;
+        if (m && typeof m.get === "function" && m.get("type") === "frame" && key !== id) {
+          frames.push({
+            id: key,
+            type: "frame",
+            x: (m.get("x") as number) ?? 0,
+            y: (m.get("y") as number) ?? 0,
+            width: (m.get("width") as number) ?? 0,
+            height: (m.get("height") as number) ?? 0,
+            title: (m.get("title") as string) ?? "",
+            fill: (m.get("fill") as string) ?? "",
+            stroke: (m.get("stroke") as string) ?? "",
+            strokeStyle: "solid",
+            hidden: false,
+          });
+        }
+      });
+      const targetFrameId = findFrameAtPoint(newCx, newCy, frames);
+
+      doc.transact(() => {
+        elementMap.set("x", x);
+        elementMap.set("y", y);
+        elementMap.set("frameId", targetFrameId);
+      });
+    }
   }, []);
 
   const moveSelectedElements = useCallback((deltaX: number, deltaY: number) => {
@@ -382,14 +679,55 @@ export default function CanvasPage() {
     if (!doc) return;
     const ids = useCanvasStore.getState().selectedElementIds;
     const elementsMap = doc.getMap("elements");
+
+    // Read frame info directly from Yjs (avoids stale React state)
+    const selectedFrameIds = new Set<string>();
+    const shiftedFrames: FrameElement[] = [];
+
+    elementsMap.forEach((val, key) => {
+      const m = val as Y.Map<unknown>;
+      if (!m || typeof m.get !== "function") return;
+      if (m.get("type") !== "frame") return;
+      if (ids.has(key)) selectedFrameIds.add(key);
+      const isMoving = ids.has(key);
+      shiftedFrames.push({
+        id: key,
+        type: "frame",
+        x: ((m.get("x") as number) ?? 0) + (isMoving ? deltaX : 0),
+        y: ((m.get("y") as number) ?? 0) + (isMoving ? deltaY : 0),
+        width: (m.get("width") as number) ?? 0,
+        height: (m.get("height") as number) ?? 0,
+        title: (m.get("title") as string) ?? "",
+        fill: (m.get("fill") as string) ?? "",
+        stroke: (m.get("stroke") as string) ?? "",
+        strokeStyle: "solid",
+        hidden: false,
+      });
+    });
+
     doc.transact(() => {
       for (const id of ids) {
         const elementMap = elementsMap.get(id) as Y.Map<unknown> | undefined;
         if (!elementMap) continue;
         const oldX = (elementMap.get("x") as number) ?? 0;
         const oldY = (elementMap.get("y") as number) ?? 0;
-        elementMap.set("x", oldX + deltaX);
-        elementMap.set("y", oldY + deltaY);
+        const newX = oldX + deltaX;
+        const newY = oldY + deltaY;
+        elementMap.set("x", newX);
+        elementMap.set("y", newY);
+
+        // Auto-assign frameId for non-frame elements whose parent frame is not also selected
+        const elType = elementMap.get("type") as string | undefined;
+        if (elType !== "frame") {
+          const currentFrameId = (elementMap.get("frameId") as string) ?? null;
+          const parentAlsoMoving = currentFrameId && selectedFrameIds.has(currentFrameId);
+          if (!parentAlsoMoving) {
+            const w = (elementMap.get("width") as number) ?? 0;
+            const h = (elementMap.get("height") as number) ?? 0;
+            const targetFrameId = findFrameAtPoint(newX + w / 2, newY + h / 2, shiftedFrames);
+            elementMap.set("frameId", targetFrameId);
+          }
+        }
       }
     });
   }, []);
@@ -469,11 +807,31 @@ export default function CanvasPage() {
     const doc = docRef.current;
     if (!doc) return;
     const elementsMap = doc.getMap("elements");
-    elementsMap.delete(id);
+
+    // If the element is a frame, also delete its children (read from Yjs)
+    const el = elementsMap.get(id) as Y.Map<unknown> | undefined;
+    const childIds: string[] = [];
+    if (el && el.get("type") === "frame") {
+      elementsMap.forEach((val, key) => {
+        const m = val as Y.Map<unknown>;
+        if (m && typeof m.get === "function" && m.get("frameId") === id) {
+          childIds.push(key);
+        }
+      });
+    }
+
+    doc.transact(() => {
+      elementsMap.delete(id);
+      for (const childId of childIds) {
+        elementsMap.delete(childId);
+      }
+    });
+
     const prev = useCanvasStore.getState().selectedElementIds;
-    if (prev.has(id)) {
+    const idsToRemove = new Set([id, ...childIds]);
+    if ([...idsToRemove].some((rid) => prev.has(rid))) {
       const next = new Set(prev);
-      next.delete(id);
+      for (const rid of idsToRemove) next.delete(rid);
       setSelectedElementIds(next);
     }
   }, [setSelectedElementIds]);
@@ -483,8 +841,23 @@ export default function CanvasPage() {
     if (!doc) return;
     const ids = useCanvasStore.getState().selectedElementIds;
     const elementsMap = doc.getMap("elements");
+
+    // Expand selection: include children of any selected frames (read from Yjs)
+    const allIds = new Set(ids);
+    for (const id of ids) {
+      const el = elementsMap.get(id) as Y.Map<unknown> | undefined;
+      if (el && el.get("type") === "frame") {
+        elementsMap.forEach((val, key) => {
+          const m = val as Y.Map<unknown>;
+          if (m && typeof m.get === "function" && m.get("frameId") === id) {
+            allIds.add(key);
+          }
+        });
+      }
+    }
+
     doc.transact(() => {
-      for (const id of ids) {
+      for (const id of allIds) {
         elementsMap.delete(id);
       }
     });
@@ -496,39 +869,138 @@ export default function CanvasPage() {
     if (!doc) return;
     const ids = useCanvasStore.getState().selectedElementIds;
     if (ids.size === 0) return;
-    
+
     const elementsMap = doc.getMap("elements");
-    const newIds: string[] = [];
-    const offset = { x: 20, y: 20 };
-    
-    doc.transact(() => {
-      for (const id of ids) {
-        const newId = generateId();
-        const clonedMap = cloneElementFromYjs(elementsMap, id, offset, newId);
-        if (clonedMap) {
-          elementsMap.set(newId, clonedMap);
-          newIds.push(newId);
+
+    // Expand selection: include children of any selected frames.
+    // Read directly from Yjs (not React state) so rapid Cmd+D always sees latest data.
+    const allIds = new Set(ids);
+    for (const id of ids) {
+      const src = elementsMap.get(id) as Y.Map<unknown> | undefined;
+      if (src && src.get("type") === "frame") {
+        elementsMap.forEach((val, key) => {
+          const m = val as Y.Map<unknown>;
+          if (m && typeof m.get === "function" && m.get("frameId") === id) {
+            allIds.add(key);
+          }
+        });
+      }
+    }
+
+    // Step 1: Read all source data into plain JS objects (snapshot before mutation)
+    const sourceData = new Map<string, Record<string, unknown>>();
+    for (const id of allIds) {
+      const src = elementsMap.get(id) as Y.Map<unknown> | undefined;
+      if (!src) continue;
+      const data: Record<string, unknown> = {};
+      src.forEach((value, key) => {
+        data[key] = key === "points" && Array.isArray(value) ? [...value] : value;
+      });
+      sourceData.set(id, data);
+    }
+
+    // Step 2: Build oldId -> newId map
+    const idMap = new Map<string, string>();
+    for (const id of sourceData.keys()) {
+      idMap.set(id, generateId());
+    }
+
+    // Step 3: Find the highest existing "Frame N" number for rename
+    const framePattern = /^Frame (\d+)$/;
+    let maxFrameNum = 0;
+    elementsMap.forEach((val) => {
+      const m = val as Y.Map<unknown> | undefined;
+      if (m && typeof m.get === "function" && m.get("type") === "frame") {
+        const title = m.get("title") as string | undefined;
+        if (title) {
+          const match = title.match(framePattern);
+          if (match) {
+            maxFrameNum = Math.max(maxFrameNum, parseInt(match[1], 10));
+          }
         }
       }
     });
-    
+
+    // Step 4: Clone from plain data — integrate Y.Map first, then set properties
+    const offset = { x: 20, y: 20 };
+    const newIds: string[] = [];
+
+    doc.transact(() => {
+      for (const [oldId, newId] of idMap) {
+        const data = sourceData.get(oldId);
+        if (!data) continue;
+
+        const newMap = new Y.Map<unknown>();
+        elementsMap.set(newId, newMap); // integrate into doc FIRST
+
+        // Set all properties on the now-integrated map
+        newMap.set("id", newId);
+        for (const [key, value] of Object.entries(data)) {
+          if (key === "id") continue; // already set
+          if (key === "x") {
+            newMap.set("x", (typeof value === "number" ? value : 0) + offset.x);
+          } else if (key === "y") {
+            newMap.set("y", (typeof value === "number" ? value : 0) + offset.y);
+          } else if (key === "frameId") {
+            // Hard-link: remap to cloned frame, or clear if parent wasn't duplicated
+            const oldFrameId = value as string | null;
+            if (oldFrameId && idMap.has(oldFrameId)) {
+              newMap.set("frameId", idMap.get(oldFrameId)!);
+            } else {
+              newMap.set("frameId", null);
+            }
+          } else if (key === "points" && Array.isArray(value)) {
+            newMap.set("points", [...value]);
+          } else {
+            newMap.set(key, value);
+          }
+        }
+
+        // Rename duplicated frames sequentially
+        if (data.type === "frame") {
+          maxFrameNum++;
+          newMap.set("title", `Frame ${maxFrameNum}`);
+        }
+
+        newIds.push(newId);
+      }
+    });
+
     // Select the newly duplicated elements
     setSelectedElementIds(new Set(newIds));
   }, [setSelectedElementIds]);
 
   const copySelectedElements = useCallback(() => {
+    const doc = docRef.current;
+    if (!doc) return;
     const ids = useCanvasStore.getState().selectedElementIds;
     if (ids.size === 0) return;
-    
-    const selectedElements = elements.filter((el) => ids.has(el.id));
+
+    const elementsMap = doc.getMap("elements");
+
+    // Expand selection: include children of any selected frames (read from Yjs)
+    const allIds = new Set(ids);
+    for (const id of ids) {
+      const el = elementsMap.get(id) as Y.Map<unknown> | undefined;
+      if (el && el.get("type") === "frame") {
+        elementsMap.forEach((val, key) => {
+          const m = val as Y.Map<unknown>;
+          if (m && typeof m.get === "function" && m.get("frameId") === id) {
+            allIds.add(key);
+          }
+        });
+      }
+    }
+
+    const selectedElements = elements.filter((el) => allIds.has(el.id));
     if (selectedElements.length === 0) return;
-    
+
     // Serialize elements to JSON
     const clipboardData = {
       collabboard: true,
       elements: selectedElements.map(serializeElement),
     };
-    
+
     // Write to clipboard
     navigator.clipboard.writeText(JSON.stringify(clipboardData)).catch((err) => {
       console.error("Failed to copy to clipboard:", err);
@@ -568,10 +1040,26 @@ export default function CanvasPage() {
             y: viewportCenterY - bboxCenterY,
           };
           
+          // Build old->new ID map for frameId remapping
+          const pasteIdMap = new Map<string, string>();
+          for (const elementData of data.elements) {
+            if (elementData.id) {
+              pasteIdMap.set(elementData.id as string, generateId());
+            }
+          }
+
           doc.transact(() => {
             for (const elementData of data.elements) {
-              const newId = generateId();
+              const oldId = elementData.id as string | undefined;
+              const newId = (oldId && pasteIdMap.get(oldId)) || generateId();
               const elementMap = deserializeElement(elementData, newId, offset);
+              // Remap frameId so pasted children point to the pasted frame
+              const oldFrameId = elementMap.get("frameId") as string | undefined;
+              if (oldFrameId && pasteIdMap.has(oldFrameId)) {
+                elementMap.set("frameId", pasteIdMap.get(oldFrameId)!);
+              } else if (oldFrameId) {
+                elementMap.set("frameId", null);
+              }
               elementsMap.set(newId, elementMap);
               newIds.push(newId);
             }
@@ -628,6 +1116,9 @@ export default function CanvasPage() {
       } else if (el.type === "text") {
         setEditingElementId(id);
         setEditText(el.text);
+      } else if (el.type === "frame") {
+        setEditingElementId(id);
+        setEditText(el.title);
       }
     },
     [elements]
@@ -640,13 +1131,20 @@ export default function CanvasPage() {
     const elementsMap = doc.getMap("elements");
     const elementMap = elementsMap.get(editingElementId) as Y.Map<unknown> | undefined;
     if (elementMap) {
-      // Sanitize and truncate text to max length (5000 chars)
+      const elType = elementMap.get("type") as string | undefined;
       const sanitizedText = stripHtmlTags(editText).slice(0, 5000);
-      elementMap.set("text", sanitizedText);
+      if (elType === "connector" && editingConnectorLabel) {
+        elementMap.set("labelText", sanitizedText);
+      } else if (elType === "frame") {
+        elementMap.set("title", sanitizedText.slice(0, 200));
+      } else {
+        elementMap.set("text", sanitizedText);
+      }
     }
     setEditingElementId(null);
+    setEditingConnectorLabel(false);
     setEditText("");
-  }, [editingElementId, editText]);
+  }, [editingElementId, editingConnectorLabel, editText]);
 
   // Focus textarea when editing starts
   useEffect(() => {
@@ -663,6 +1161,8 @@ export default function CanvasPage() {
   useHotkey("C", () => setActiveTool("circle"), { enabled: !editingElementId });
   useHotkey("L", () => setActiveTool("line"), { enabled: !editingElementId });
   useHotkey("T", () => setActiveTool("text"), { enabled: !editingElementId });
+  useHotkey("F", () => setActiveTool("frame"), { enabled: !editingElementId });
+  useHotkey("X", () => setActiveTool("connector"), { enabled: !editingElementId });
 
   // Modifier combos
   useHotkey("Mod+C", () => {
@@ -790,6 +1290,44 @@ export default function CanvasPage() {
       return;
     }
 
+    if (activeTool === "frame") {
+      const world = toWorld(event);
+      const id = createFrameDraft(world.x, world.y);
+      if (id) {
+        drawingShapeRef.current = { id, tool: "frame", start: world };
+      }
+      return;
+    }
+
+    if (activeTool === "connector") {
+      const world = toWorld(event);
+      // Snap start point to nearest shape anchor
+      const excludeIds = new Set<string>();
+      const snap = findSnapTarget(world, elements, excludeIds);
+      const startPt = snap ? snap.anchor : world;
+      const id = createConnectorDraft(startPt.x, startPt.y);
+      if (id) {
+        // If snapped, set the fromId and fromAnchor
+        if (snap) {
+          const doc = docRef.current;
+          if (doc) {
+            const elementsMap = doc.getMap("elements");
+            const elementMap = elementsMap.get(id) as Y.Map<unknown> | undefined;
+            if (elementMap) {
+              doc.transact(() => {
+                elementMap.set("fromId", snap.element.id);
+                elementMap.set("fromAnchor", snap.anchorIndex);
+                elementMap.set("fromX", snap.anchor.x);
+                elementMap.set("fromY", snap.anchor.y);
+              });
+            }
+          }
+        }
+        drawingShapeRef.current = { id, tool: "connector", start: startPt };
+      }
+      return;
+    }
+
     connectionRef.current?.setCursor(toWorld(event));
   };
 
@@ -806,10 +1344,28 @@ export default function CanvasPage() {
       }));
       return;
     }
+    // Show snap anchors when hovering with connector tool (not drawing yet)
+    if (activeTool === "connector" && !drawingShapeRef.current) {
+      const world = toWorld(event);
+      const excludeIds = new Set<string>();
+      const nearby = findNearbyAnchors(world, elements, excludeIds);
+      setConnectorSnapAnchors(nearby.flatMap((n) => n.anchors));
+      const snapTarget = findSnapTarget(world, elements, excludeIds);
+      setConnectorSnapTarget(snapTarget ? snapTarget.anchor : null);
+    }
+
     if (drawingShapeRef.current) {
       const world = toWorld(event);
       const { id, tool, start } = drawingShapeRef.current;
-      if (tool === "line") {
+      if (tool === "connector") {
+        moveConnectorEndpoint(id, "to", world.x, world.y);
+        // Show snap preview on target shapes during drag
+        const excludeIds = new Set([id]);
+        const nearby = findNearbyAnchors(world, elements, excludeIds);
+        setConnectorSnapAnchors(nearby.flatMap((n) => n.anchors));
+        const snapTarget = findSnapTarget(world, elements, excludeIds);
+        setConnectorSnapTarget(snapTarget ? snapTarget.anchor : null);
+      } else if (tool === "line") {
         const doc = docRef.current;
         if (doc) {
           const elementsMap = doc.getMap("elements");
@@ -840,10 +1396,33 @@ export default function CanvasPage() {
     connectionRef.current?.setCursor(toWorld(event));
   };
 
-  const onOverlayPointerUp = () => {
+  const onOverlayPointerUp = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (drawingShapeRef.current) {
+      const { id, tool } = drawingShapeRef.current;
+      if (tool === "connector") {
+        const world = toWorld(event);
+        finalizeConnectorEndpoint(id, "to", world.x, world.y);
+        // Re-finalize "from" in case it wasn't snapped during creation
+        finalizeConnectorEndpoint(id, "from", drawingShapeRef.current.start.x, drawingShapeRef.current.start.y);
+      } else if (tool !== "frame") {
+        // Assign frameId based on the drawn shape's final center position
+        const doc = docRef.current;
+        if (doc) {
+          const elementsMap = doc.getMap("elements");
+          const elementMap = elementsMap.get(id) as Y.Map<unknown> | undefined;
+          if (elementMap) {
+            const ex = (elementMap.get("x") as number) ?? 0;
+            const ey = (elementMap.get("y") as number) ?? 0;
+            const ew = (elementMap.get("width") as number) ?? 0;
+            const eh = (elementMap.get("height") as number) ?? 0;
+            assignFrameIdToElement(elementMap, ex + ew / 2, ey + eh / 2);
+          }
+        }
+      }
       drawingShapeRef.current = null;
       setActiveTool("pointer");
+      setConnectorSnapAnchors([]);
+      setConnectorSnapTarget(null);
     }
     setIsPanning(false);
     panStartRef.current = null;
@@ -854,6 +1433,8 @@ export default function CanvasPage() {
       drawingShapeRef.current = null;
       setActiveTool("pointer");
     }
+    setConnectorSnapAnchors([]);
+    setConnectorSnapTarget(null);
     connectionRef.current?.setCursor(null);
   };
 
@@ -916,10 +1497,6 @@ export default function CanvasPage() {
     setCamera({ x: newX, y: newY, scale: nextScale });
   };
 
-  const signOut = async () => {
-    await authClient.signOut();
-  };
-
   // Compute editing element position for text overlay
   const singleSelectedId = selectedElementIds.size === 1 ? [...selectedElementIds][0] : null;
   const selectedElement = singleSelectedId
@@ -929,56 +1506,84 @@ export default function CanvasPage() {
   const editingElement = editingElementId
     ? elements.find((e) => e.id === editingElementId)
     : null;
+
+  // Compute connector label midpoint for overlay
+  const connectorLabelMidpoint = editingElement?.type === "connector" && editingConnectorLabel
+    ? (() => {
+        const conn = editingElement as import("@collab/shared/collab").ConnectorElement;
+        const { from, to } = resolveEndpoints(conn, elements);
+        const pathPoints = computePath(from, to, conn.routingStyle, conn.elbowMidpoint, conn.fromAnchor, conn.toAnchor);
+        return getPathMidpoint(pathPoints);
+      })()
+    : null;
+
   const editOverlayStyle = editingElement
-    ? {
-        left: editingElement.x * camera.scale + camera.x,
-        top: editingElement.y * camera.scale + camera.y,
-        width: editingElement.width,
-        height: editingElement.height,
-        transform: `scale(${camera.scale})`,
-        transformOrigin: "top left" as const,
-      }
+    ? editingElement.type === "connector" && editingConnectorLabel && connectorLabelMidpoint
+      ? {
+          left: connectorLabelMidpoint.x * camera.scale + camera.x,
+          top: connectorLabelMidpoint.y * camera.scale + camera.y,
+          transform: `scale(${camera.scale}) translate(-50%, -50%)`,
+          transformOrigin: "center center" as const,
+        }
+      : editingElement.type === "frame"
+        ? {
+            left: editingElement.x * camera.scale + camera.x,
+            top: editingElement.y * camera.scale + camera.y - 23 * camera.scale,
+            transform: `scale(${camera.scale})`,
+            transformOrigin: "top left" as const,
+          }
+        : {
+            left: editingElement.x * camera.scale + camera.x,
+            top: editingElement.y * camera.scale + camera.y,
+            width: editingElement.width,
+            height: editingElement.height,
+            transform: `scale(${camera.scale})`,
+            transformOrigin: "top left" as const,
+          }
     : null;
 
   return (
     <main className="min-h-screen grid grid-rows-[auto_1fr_auto]">
-      <header className="px-4 py-3 border-b border-[#2a2a2a] bg-[#1a1a1a] flex justify-between items-center gap-4">
-        <div className="flex items-center gap-2">
+      <header className="px-4 py-2.5 border-b border-[#2a2a2a] bg-[#1a1a1a] flex justify-between items-center gap-4">
+        <div className="flex items-center gap-3">
           <Link
             href="/dashboard"
-            className="text-[#60a5fa] hover:text-[#93bbfc] text-sm mr-1"
+            className="flex items-center gap-1.5 text-[#60a5fa] hover:text-[#93bbfc] text-sm transition-colors"
           >
-            &larr; Boards
+            <ArrowLeft className="size-4" />
+            Boards
           </Link>
           <span className="text-[#555]">|</span>
-          <strong>{roomId}</strong>
-          <span className="mx-2 text-[#888]">·</span>
-          {currentUser.name}
-          {peerCount > 1 ? (
-            <>
-              <span className="mx-2 text-[#888]">·</span>
-              <span className="text-[#7ee8a2]">{peerCount} online</span>
-            </>
-          ) : null}
+          <strong className="text-sm">{boardName || roomId}</strong>
           {connectionState === "reconnecting" ? (
-            <>
-              <span className="mx-2 text-[#888]">·</span>
-              <span className="text-[#fbbf24]">reconnecting...</span>
-            </>
+            <span className="text-[#fbbf24] text-xs">reconnecting...</span>
           ) : connectionState === "disconnected" ? (
-            <>
-              <span className="mx-2 text-[#888]">·</span>
-              <span className="text-[#ff9da0]">disconnected</span>
-            </>
+            <span className="text-[#ff9da0] text-xs">disconnected</span>
           ) : null}
         </div>
-        <button
-          type="button"
-          onClick={signOut}
-          className="border border-[#3a3a3a] rounded-lg px-2.5 py-1.5 bg-[#242424] text-inherit cursor-pointer"
-        >
-          Sign out
-        </button>
+        <div className="flex">
+          {onlineUsers.map((user, index) => (
+            <Tooltip key={user.id}>
+              <TooltipTrigger asChild>
+                <Avatar
+                  size="sm"
+                  className="border-2 border-[#1a1a1a] cursor-default"
+                  style={{ zIndex: onlineUsers.length - index }}
+                >
+                  <AvatarFallback
+                    className="text-[10px] font-medium text-white"
+                    style={{ backgroundColor: user.color }}
+                  >
+                    {user.name.charAt(0).toUpperCase()}
+                  </AvatarFallback>
+                </Avatar>
+              </TooltipTrigger>
+              <TooltipContent side="bottom" sideOffset={4}>
+                {user.name}
+              </TooltipContent>
+            </Tooltip>
+          ))}
+        </div>
       </header>
 
       <section
@@ -1005,16 +1610,52 @@ export default function CanvasPage() {
           syntheticObjectCount={syntheticObjectCount}
           elements={elements}
           activeTool={activeTool}
+          getFrameChildIdsFn={getFrameChildIdsFromYjs}
           onSelectElement={selectElement}
           onDragElementStart={() => setIsDraggingElement(true)}
+          onDragElementMove={(id, x, y) => {
+            const doc = docRef.current;
+            if (!doc) return;
+            const elementsMap = doc.getMap("elements");
+            const elementMap = elementsMap.get(id) as Y.Map<unknown> | undefined;
+            if (!elementMap) return;
+            doc.transact(() => {
+              elementMap.set("x", x);
+              elementMap.set("y", y);
+            });
+          }}
           onDragElement={(...args) => { setIsDraggingElement(false); moveElement(...args); }}
           onDragSelectedElements={(...args) => { setIsDraggingElement(false); moveSelectedElements(...args); }}
           onResizeElement={resizeElement}
           onRotateElement={rotateElement}
           onRotateCursorChange={setRotationCursor}
           onDblClickElement={startEditing}
+          editingElementId={editingElementId}
           onLineEndpointDrag={moveLineEndpoint}
           onLineEndpointDragEnd={moveLineEndpoint}
+          onConnectorEndpointDrag={(id, endpoint, wx, wy) => {
+            moveConnectorEndpoint(id, endpoint, wx, wy);
+            const excludeIds = new Set([id]);
+            const nearby = findNearbyAnchors({ x: wx, y: wy }, elements, excludeIds);
+            setConnectorSnapAnchors(nearby.flatMap((n) => n.anchors));
+            const snap = findSnapTarget({ x: wx, y: wy }, elements, excludeIds);
+            setConnectorSnapTarget(snap ? snap.anchor : null);
+          }}
+          onConnectorEndpointDragEnd={(id, endpoint, wx, wy) => {
+            finalizeConnectorEndpoint(id, endpoint, wx, wy);
+            setConnectorSnapAnchors([]);
+            setConnectorSnapTarget(null);
+          }}
+          onConnectorMidpointDrag={moveConnectorMidpoint}
+          onConnectorMidpointDragEnd={moveConnectorMidpoint}
+          onConnectorLabelClick={(id) => {
+            const el = elements.find((e) => e.id === id);
+            if (el?.type === "connector") {
+              setEditingElementId(id);
+              setEditingConnectorLabel(true);
+              setEditText(el.labelText.trim());
+            }
+          }}
           onStagePointerDown={(worldX, worldY) => {
             if (isSpacebarPressedRef.current) return;
             clearSelection();
@@ -1052,6 +1693,8 @@ export default function CanvasPage() {
             setMarqueeRect(null);
           }}
           marqueeRect={marqueeRect}
+          connectorSnapAnchors={connectorSnapAnchors}
+          connectorSnapTarget={connectorSnapTarget}
         />
 
         {/* Remote cursor overlay */}
@@ -1082,11 +1725,22 @@ export default function CanvasPage() {
         </div>
 
         {/* Selection toolbar - floating above selected element */}
-        {selectedElement && !editingElementId && !isDraggingElement && (
+        {selectedElement && (!editingElementId || editingConnectorLabel) && !isDraggingElement && (
           <SelectionToolbar
             element={selectedElement}
             onPropertyChange={(key, value) => updateElementProperty(selectedElement.id, key, value)}
             camera={camera}
+            editingConnectorLabel={editingConnectorLabel}
+            onStartEditingConnectorLabel={
+              selectedElement.type === "connector"
+                ? () => {
+                    updateElementProperty(selectedElement.id, "labelText", " ");
+                    setEditingConnectorLabel(true);
+                    setEditingElementId(selectedElement.id);
+                    setEditText("");
+                  }
+                : undefined
+            }
           />
         )}
 
@@ -1096,27 +1750,84 @@ export default function CanvasPage() {
             className="absolute z-30"
             style={editOverlayStyle}
           >
-            <textarea
-              ref={textareaRef}
-              value={editText}
-              onChange={(e) => setEditText(e.target.value)}
-              onBlur={commitEdit}
-              onKeyDown={(e) => {
-                if (e.key === "Escape") {
-                  commitEdit();
-                }
-                e.stopPropagation();
-              }}
-              className="w-full h-full resize-none border-none ring-2 ring-[#60a5fa] rounded bg-transparent outline-none"
-              style={{
-                fontFamily: (editingElement.type === "sticky-note" || editingElement.type === "text") ? editingElement.fontFamily : "system-ui, sans-serif",
-                fontSize: (editingElement.type === "sticky-note" || editingElement.type === "text") ? editingElement.fontSize : 14,
-                lineHeight: 1,
-                padding: editingElement.type === "text" ? 0 : 12,
-                background: editingElement.type === "sticky-note" ? editingElement.color : "transparent",
-                color: editingElement.type === "text" ? editingElement.fill : "#1a1a1a",
-              }}
-            />
+            {editingElement.type === "connector" && editingConnectorLabel ? (
+              <input
+                ref={textareaRef as unknown as React.RefObject<HTMLInputElement>}
+                type="text"
+                value={editText}
+                onChange={(e) => setEditText(e.target.value)}
+                onBlur={commitEdit}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape" || e.key === "Enter") {
+                    commitEdit();
+                  }
+                  e.stopPropagation();
+                }}
+                size={Math.max(1, editText.length)}
+                className="ring-1 ring-[#60a5fa] rounded bg-[#1a1a1a]/90 outline-none text-center"
+                style={{
+                  display: "block",
+                  fontFamily: editingElement.labelFontFamily,
+                  fontSize: editingElement.labelFontSize,
+                  fontWeight: editingElement.labelBold ? "bold" : "normal",
+                  textDecoration: editingElement.labelStrikethrough ? "line-through" : "none",
+                  color: editingElement.labelFill,
+                  padding: "2px 8px",
+                  minWidth: 60,
+                  width: `${Math.max(60, editText.length * editingElement.labelFontSize * 0.6 + 20)}px`,
+                }}
+              />
+            ) : editingElement.type === "frame" ? (
+              <input
+                ref={textareaRef as unknown as React.RefObject<HTMLInputElement>}
+                type="text"
+                value={editText}
+                onChange={(e) => setEditText(e.target.value)}
+                onBlur={commitEdit}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape" || e.key === "Enter") {
+                    commitEdit();
+                  }
+                  e.stopPropagation();
+                }}
+                size={Math.max(1, editText.length)}
+                className="ring-1 ring-[#60a5fa] rounded bg-white outline-none"
+                style={{
+                  display: "block",
+                  fontFamily: "system-ui, sans-serif",
+                  fontSize: 13,
+                  fontWeight: 500,
+                  lineHeight: "19px",
+                  height: 19,
+                  padding: "0 8px",
+                  color: "#525252",
+                  minWidth: 40,
+                  width: `${Math.max(40, editText.length * 8 + 20)}px`,
+                }}
+              />
+            ) : (
+              <textarea
+                ref={textareaRef}
+                value={editText}
+                onChange={(e) => setEditText(e.target.value)}
+                onBlur={commitEdit}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") {
+                    commitEdit();
+                  }
+                  e.stopPropagation();
+                }}
+                className="w-full h-full resize-none border-none ring-2 ring-[#60a5fa] rounded bg-transparent outline-none"
+                style={{
+                  fontFamily: (editingElement.type === "sticky-note" || editingElement.type === "text") ? editingElement.fontFamily : "system-ui, sans-serif",
+                  fontSize: (editingElement.type === "sticky-note" || editingElement.type === "text") ? editingElement.fontSize : 14,
+                  lineHeight: 1,
+                  padding: editingElement.type === "text" ? 0 : 12,
+                  background: editingElement.type === "sticky-note" ? editingElement.color : "transparent",
+                  color: editingElement.type === "text" ? editingElement.fill : "#1a1a1a",
+                }}
+              />
+            )}
           </div>
         )}
 
@@ -1136,7 +1847,13 @@ export default function CanvasPage() {
         {/* Toolbar */}
         <Toolbar
           activeTool={activeTool}
-          onToolChange={setActiveTool}
+          onToolChange={(tool) => {
+            setActiveTool(tool);
+            if (tool !== "connector") {
+              setConnectorSnapAnchors([]);
+              setConnectorSnapTarget(null);
+            }
+          }}
           onDelete={deleteSelectedElements}
           onDuplicate={duplicateSelectedElements}
           hasSelection={selectedElementIds.size > 0}
@@ -1165,6 +1882,10 @@ export default function CanvasPage() {
         <kbd className="bg-[#242424] border border-[#3a3a3a] border-b-2 rounded px-1.5 py-0.5">L</kbd> Line
         <span className="mx-1.5 text-[#555]">·</span>
         <kbd className="bg-[#242424] border border-[#3a3a3a] border-b-2 rounded px-1.5 py-0.5">T</kbd> Text
+        <span className="mx-1.5 text-[#555]">·</span>
+        <kbd className="bg-[#242424] border border-[#3a3a3a] border-b-2 rounded px-1.5 py-0.5">F</kbd> Frame
+        <span className="mx-1.5 text-[#555]">·</span>
+        <kbd className="bg-[#242424] border border-[#3a3a3a] border-b-2 rounded px-1.5 py-0.5">X</kbd> Connector
         <span className="mx-1.5 text-[#555]">·</span>
         <kbd className="bg-[#242424] border border-[#3a3a3a] border-b-2 rounded px-1.5 py-0.5">Space</kbd> Pan
         <span className="mx-1.5 text-[#555]">·</span>

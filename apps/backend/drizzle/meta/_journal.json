@@ -15,6 +15,13 @@
       "when": 1771276927344,
       "tag": "0001_illegal_violations",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1771369592972,
+      "tag": "0002_rich_angel",
+      "breakpoints": true
     }
   ]
 }

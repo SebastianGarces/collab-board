@@ -10,6 +10,7 @@
     "perf:ws:ci": "bun --env-file=../../.env src/collab/ws-benchmark.ts --mode=ci",
     "perf:users:seed": "bun --env-file=../../.env src/auth/perf-users-seed.ts",
     "perf:users:cleanup": "bun --env-file=../../.env src/auth/perf-users-cleanup.ts",
+    "seed:public-board": "bun --env-file=../../.env src/boards/seed-public-board.ts",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "migrate": "bun run db:generate && bun run db:migrate"

@@ -5,7 +5,12 @@ import type * as Y from "yjs";
 
 import { MIN_ELEMENT_SIZE } from "@/components/canvas/shape-transform";
 import type { BoardElement } from "@collab/shared/collab";
-import { DEFAULT_FONT_FAMILY, DEFAULT_STICKY_NOTE_FONT_SIZE } from "@collab/shared/collab";
+import {
+  DEFAULT_FONT_FAMILY,
+  DEFAULT_STICKY_NOTE_FONT_SIZE,
+  DEFAULT_CONNECTOR_STROKE,
+  DEFAULT_CONNECTOR_STROKE_WIDTH,
+} from "@collab/shared/collab";
 
 function toFiniteNumber(value: unknown, fallback: number): number {
   if (typeof value !== "number" || !Number.isFinite(value)) {
@@ -30,6 +35,7 @@ function yMapToElement(id: string, map: Y.Map<unknown>): BoardElement | null {
     width: toSafeSize(map.get("width"), 200),
     height: toSafeSize(map.get("height"), 200),
     rotation: toFiniteNumber(map.get("rotation"), 0),
+    frameId: (map.get("frameId") as string) || null,
   };
 
   if (type === "sticky-note") {
@@ -124,6 +130,93 @@ function yMapToElement(id: string, map: Y.Map<unknown>): BoardElement | null {
       fontSize: toFiniteNumber(map.get("fontSize"), 18),
       fontFamily: (map.get("fontFamily") as string) || DEFAULT_FONT_FAMILY,
       fill: (map.get("fill") as string) ?? "#f8fafc",
+    };
+  }
+
+  if (type === "frame") {
+    const strokeStyle = map.get("strokeStyle") as string | undefined;
+    return {
+      ...base,
+      type: "frame",
+      title: (map.get("title") as string) ?? "Section",
+      fill: (map.get("fill") as string) ?? "#f5f5f5",
+      stroke: (map.get("stroke") as string) ?? "#d4d4d4",
+      strokeStyle:
+        strokeStyle === "solid" || strokeStyle === "dashed" || strokeStyle === "none"
+          ? strokeStyle
+          : "solid",
+      hidden: (map.get("hidden") as boolean) ?? false,
+    };
+  }
+
+  if (type === "connector") {
+    const routingStyle = map.get("routingStyle") as string | undefined;
+    const startArrow = map.get("startArrow") as string | undefined;
+    const endArrow = map.get("endArrow") as string | undefined;
+    const dashStyle = map.get("dashStyle") as string | undefined;
+
+    const fromX = toFiniteNumber(map.get("fromX"), 0);
+    const fromY = toFiniteNumber(map.get("fromY"), 0);
+    const toX = toFiniteNumber(map.get("toX"), 0);
+    const toY = toFiniteNumber(map.get("toY"), 0);
+
+    const bboxX = Math.min(fromX, toX);
+    const bboxY = Math.min(fromY, toY);
+    const bboxW = Math.max(Math.abs(toX - fromX), 1);
+    const bboxH = Math.max(Math.abs(toY - fromY), 1);
+
+    return {
+      id: base.id,
+      type: "connector",
+      x: bboxX,
+      y: bboxY,
+      width: bboxW,
+      height: bboxH,
+      fromId: (map.get("fromId") as string) ?? "",
+      toId: (map.get("toId") as string) ?? "",
+      fromAnchor: (() => {
+        const raw = map.get("fromAnchor");
+        if (typeof raw === "number" && Number.isFinite(raw) && raw >= 0 && raw <= 3) return raw;
+        return null;
+      })(),
+      toAnchor: (() => {
+        const raw = map.get("toAnchor");
+        if (typeof raw === "number" && Number.isFinite(raw) && raw >= 0 && raw <= 3) return raw;
+        return null;
+      })(),
+      fromX,
+      fromY,
+      toX,
+      toY,
+      routingStyle:
+        routingStyle === "orthogonal" || routingStyle === "curved" || routingStyle === "straight"
+          ? routingStyle
+          : "orthogonal",
+      startArrow:
+        startArrow === "none" || startArrow === "arrow" || startArrow === "diamond"
+          ? startArrow
+          : "none",
+      endArrow:
+        endArrow === "none" || endArrow === "arrow" || endArrow === "diamond"
+          ? endArrow
+          : "none",
+      stroke: (map.get("stroke") as string) ?? DEFAULT_CONNECTOR_STROKE,
+      strokeWidth: toFiniteNumber(map.get("strokeWidth"), DEFAULT_CONNECTOR_STROKE_WIDTH),
+      dashStyle:
+        dashStyle === "solid" || dashStyle === "dashed" || dashStyle === "dotted"
+          ? dashStyle
+          : "solid",
+      elbowMidpoint: (() => {
+        const raw = map.get("elbowMidpoint");
+        if (typeof raw === "number" && Number.isFinite(raw)) return raw;
+        return null;
+      })(),
+      labelText: (map.get("labelText") as string) ?? "",
+      labelFontSize: toFiniteNumber(map.get("labelFontSize"), 14),
+      labelFontFamily: (map.get("labelFontFamily") as string) || DEFAULT_FONT_FAMILY,
+      labelFill: (map.get("labelFill") as string) ?? "#f8fafc",
+      labelBold: (map.get("labelBold") as boolean) ?? false,
+      labelStrikethrough: (map.get("labelStrikethrough") as boolean) ?? false,
     };
   }
 

@@ -1,6 +1,6 @@
 # Memory Index
 
-Last updated: 2026-02-17
+Last updated: 2026-02-18
 
 Read this first before looking for specific memories. If it's not listed here, it's not stored.
 
@@ -20,7 +20,7 @@ Read this first before looking for specific memories. If it's not listed here, i
 
 ## Decisions
 
-- `docs/memory/decisions.md` — Architecture Decision Records (ADR-001 through ADR-009). Covers CRDT choice, rendering, auth, deployment, AI flow, data layer, UI framework, Zustand for canvas state, and WS message buffering. (2026-02-17)
+- `docs/memory/decisions.md` — Architecture Decision Records (ADR-001 through ADR-010). Covers CRDT choice, rendering, auth, deployment, AI flow, data layer, UI framework, Zustand for canvas state, WS message buffering, and connector architecture. (2026-02-18)
 
 ## Known Issues
 
