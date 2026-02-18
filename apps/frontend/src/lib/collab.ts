@@ -146,7 +146,7 @@ export function createCollabConnection(args: {
           const payload = JSON.parse(rawPayload) as PerfProbeMessage;
           args.onPerfProbe?.({
             ...payload,
-            latencyMs: Math.max(0, performance.now() - payload.sentAtMs)
+            latencyMs: Math.max(0, Date.now() - payload.sentAtMs)
           });
         } catch {
           // ignore invalid perf probes
@@ -172,8 +172,22 @@ export function createCollabConnection(args: {
 
   connectWs();
 
+  let pendingCursor: { x: number; y: number } | null | undefined;
+  let cursorRafId: number | null = null;
+
+  const flushCursor = () => {
+    cursorRafId = null;
+    if (pendingCursor !== undefined) {
+      publishPresence(pendingCursor);
+      pendingCursor = undefined;
+    }
+  };
+
   const setCursor = (cursor: { x: number; y: number } | null) => {
-    publishPresence(cursor);
+    pendingCursor = cursor;
+    if (cursorRafId === null) {
+      cursorRafId = requestAnimationFrame(flushCursor);
+    }
   };
 
   const sendPerfProbe = (kind: PerfProbeKind, id: string) => {
@@ -182,7 +196,7 @@ export function createCollabConnection(args: {
       kind,
       roomId: args.roomId,
       senderClientId: doc.clientID,
-      sentAtMs: performance.now()
+      sentAtMs: Date.now()
     };
     const encoder = encoding.createEncoder();
     encoding.writeVarUint(encoder, WS_MESSAGE_PERF_PROBE);
@@ -192,6 +206,10 @@ export function createCollabConnection(args: {
 
   const disconnect = () => {
     disposed = true;
+    if (cursorRafId !== null) {
+      cancelAnimationFrame(cursorRafId);
+      cursorRafId = null;
+    }
     if (reconnectTimer !== null) {
       clearTimeout(reconnectTimer);
       reconnectTimer = null;

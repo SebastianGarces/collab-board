@@ -3,27 +3,33 @@ import { resolve } from "node:path";
 
 import { expect, test, type BrowserContext, type Page } from "@playwright/test";
 
+type PerfStats = {
+  min: number;
+  max: number;
+  avg: number;
+  p50: number;
+  p95: number;
+  p99: number;
+  count: number;
+};
+
 type PerfSummary = {
   canvasFps: {
     avg: number;
     sampleCount: number;
   };
   canvasLongFramesPerMinute: number;
-  inputToRenderMs: {
-    p95: number;
-    count: number;
-  };
+  inputToRenderMs: PerfStats;
   probeLatencyMs: {
-    cursor: {
-      p95: number;
-      count: number;
-    };
+    cursor: PerfStats;
+    object: PerfStats;
   };
 };
 
 type BudgetsFile = {
   thresholds: {
     cursorSyncLatencyMs: { p95Max: number };
+    objectSyncLatencyMs: { p95Max: number };
     canvasFps: { avgMin: number };
     concurrentUsers: { min: number };
     objectCapacity: { min: number };
@@ -97,7 +103,7 @@ test("meets core real-time performance budgets with 5 users", async ({ browser }
   );
 
   try {
-    const pages = [];
+    const pages: Page[] = [];
     for (let index = 0; index < contexts.length; index++) {
       const context = contexts[index];
       const creds = perfUsers.users[index];
@@ -110,29 +116,59 @@ test("meets core real-time performance budgets with 5 users", async ({ browser }
     const sourcePage = pages[0];
     const receiverPage = pages[1];
 
+    // Inject 550 synthetic objects on ALL pages (10% above the 500 budget minimum)
+    // so every client renders under realistic load during measurements.
+    const syntheticCount = budgets.thresholds.objectCapacity.min + 50;
+    await Promise.all(
+      pages.map((page) =>
+        page.evaluate((count) => {
+          const perfApi = (window as any).__collabPerf;
+          if (perfApi) perfApi.setSyntheticObjectCount(count);
+        }, syntheticCount)
+      )
+    );
     await sourcePage.waitForTimeout(500);
+
     await sourcePage.evaluate(async () => {
       const perfApi = (window as any).__collabPerf;
       if (!perfApi) throw new Error("Missing perf API on source page.");
-      perfApi.setSyntheticObjectCount(500);
       await perfApi.runPanZoomScript(6000);
       await perfApi.runInteractionScript(180);
       await perfApi.sendCursorProbe(150);
+      await perfApi.sendObjectProbe(150);
     });
     await receiverPage.waitForTimeout(500);
 
-    const summary = await getPerfSummary(receiverPage);
-    expect(summary.canvasFps.avg).toBeGreaterThanOrEqual(budgets.thresholds.canvasFps.avgMin);
-    expect(summary.probeLatencyMs.cursor.p95).toBeLessThanOrEqual(
-      budgets.thresholds.cursorSyncLatencyMs.p95Max
-    );
-    expect(summary.inputToRenderMs.p95).toBeLessThanOrEqual(
-      budgets.thresholds.inputToRenderMs.p95Max
-    );
-    expect(summary.canvasLongFramesPerMinute).toBeLessThanOrEqual(
-      budgets.thresholds.canvasLongFramesPerMinute.max
-    );
-    expect(summary.probeLatencyMs.cursor.count).toBeGreaterThan(50);
+    const receiverSummary = await getPerfSummary(receiverPage);
+    const sourceSummary = await getPerfSummary(sourcePage);
+
+    const summary: PerfSummary = {
+      canvasFps: receiverSummary.canvasFps,
+      canvasLongFramesPerMinute: receiverSummary.canvasLongFramesPerMinute,
+      inputToRenderMs: sourceSummary.inputToRenderMs,
+      probeLatencyMs: receiverSummary.probeLatencyMs,
+    };
+
+    // --- Soft warnings (tracked in artifacts, do not fail CI per performance-budgets.md) ---
+    const softWarnings: string[] = [];
+    if (summary.canvasLongFramesPerMinute > budgets.thresholds.canvasLongFramesPerMinute.max) {
+      softWarnings.push(
+        `canvasLongFramesPerMinute: ${summary.canvasLongFramesPerMinute.toFixed(1)} > ${budgets.thresholds.canvasLongFramesPerMinute.max}`
+      );
+    }
+    if (summary.probeLatencyMs.cursor.p99 > 75) {
+      softWarnings.push(
+        `cursorSyncLatencyMs.p99: ${summary.probeLatencyMs.cursor.p99} > 75`
+      );
+    }
+    if (summary.probeLatencyMs.object.p99 > 150) {
+      softWarnings.push(
+        `objectSyncLatencyMs.p99: ${summary.probeLatencyMs.object.p99} > 150`
+      );
+    }
+    if (softWarnings.length > 0) {
+      console.warn(`[perf] soft budget warnings:\n  ${softWarnings.join("\n  ")}`);
+    }
 
     await mkdir(ARTIFACTS_DIR, { recursive: true });
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
@@ -143,8 +179,9 @@ test("meets core real-time performance budgets with 5 users", async ({ browser }
         {
           createdAt: new Date().toISOString(),
           concurrentUsers: contexts.length,
-          syntheticObjectCount: budgets.thresholds.objectCapacity.min,
-          summary
+          syntheticObjectCount: syntheticCount,
+          summary,
+          softWarnings: softWarnings.length > 0 ? softWarnings : undefined,
         },
         null,
         2
@@ -152,6 +189,21 @@ test("meets core real-time performance budgets with 5 users", async ({ browser }
       "utf8"
     );
     await writeFile(resolve(ARTIFACTS_DIR, "frontend-perf-latest.json"), JSON.stringify(summary, null, 2), "utf8");
+
+    // --- Hard budgets (fail CI) ---
+    expect(summary.canvasFps.avg).toBeGreaterThanOrEqual(budgets.thresholds.canvasFps.avgMin);
+    expect(summary.probeLatencyMs.cursor.p95).toBeLessThanOrEqual(
+      budgets.thresholds.cursorSyncLatencyMs.p95Max
+    );
+    expect(summary.probeLatencyMs.object.p95).toBeLessThanOrEqual(
+      budgets.thresholds.objectSyncLatencyMs.p95Max
+    );
+    expect(summary.inputToRenderMs.p95).toBeLessThanOrEqual(
+      budgets.thresholds.inputToRenderMs.p95Max
+    );
+    expect(summary.probeLatencyMs.cursor.count).toBeGreaterThan(50);
+    expect(summary.probeLatencyMs.object.count).toBeGreaterThan(50);
+    expect(summary.inputToRenderMs.count).toBeGreaterThan(50);
   } finally {
     await Promise.all(contexts.map((context) => context.close()));
   }

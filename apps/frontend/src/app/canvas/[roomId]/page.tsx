@@ -1,12 +1,13 @@
 "use client";
 
 import { useHotkey } from "@tanstack/react-hotkeys";
+import type Konva from "konva";
 import { ArrowLeft } from "lucide-react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import type { PointerEvent as ReactPointerEvent, WheelEvent as ReactWheelEvent } from "react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as Y from "yjs";
 
 import { SelectionToolbar } from "@/components/board/selection-toolbar";
@@ -47,6 +48,11 @@ const RotationCursor = dynamic(
   { ssr: false }
 );
 
+const DebugMetrics = dynamic(
+  () => import("@/components/canvas/debug-metrics").then((m) => m.DebugMetrics),
+  { ssr: false }
+);
+
 type RemoteCursor = {
   clientId: number;
   user: PresenceState["user"];
@@ -79,11 +85,70 @@ function generateId() {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+const RemoteCursorOverlay = memo(function RemoteCursorOverlay({
+  remoteCursors,
+  camera,
+}: {
+  remoteCursors: RemoteCursor[];
+  camera: Camera;
+}) {
+  return (
+    <div className="absolute inset-0 pointer-events-none z-10">
+      {remoteCursors.map((remote) => (
+        <div
+          key={remote.clientId}
+          className="absolute left-0 top-0"
+          style={{
+            willChange: "transform",
+            transform: `translate(${remote.cursor.x * camera.scale + camera.x}px, ${remote.cursor.y * camera.scale + camera.y}px)`,
+          }}
+        >
+          <svg className="w-[22px] h-[22px] block" viewBox="0 0 24 24" fill="none" aria-hidden>
+            <path
+              d="M4 3L4 20L9.5 14.8L13 21L16.3 19.2L12.8 13L20 13L4 3Z"
+              fill={remote.user.color}
+              stroke="white"
+              strokeWidth="1.5"
+              strokeLinejoin="round"
+            />
+          </svg>
+          <span className="mt-1 inline-block px-1.5 py-0.5 rounded-md bg-[#121212]/85 border border-[#3a3a3a] text-xs whitespace-nowrap">
+            {remote.user.name}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+});
+
 export default function CanvasPage() {
   const { roomId } = useParams<{ roomId: string }>();
   const router = useRouter();
   const { data: session, isPending } = authClient.useSession();
-  const [camera, setCamera] = useState<Camera>({ x: 0, y: 0, scale: 1 });
+  const [camera, setCameraState] = useState<Camera>({ x: 0, y: 0, scale: 1 });
+  const cameraRef = useRef<Camera>({ x: 0, y: 0, scale: 1 });
+  const dotGridRef = useRef<HTMLDivElement | null>(null);
+
+  const setCamera = useCallback((next: Camera | ((prev: Camera) => Camera)) => {
+    const resolved = typeof next === "function" ? next(cameraRef.current) : next;
+    cameraRef.current = resolved;
+    setCameraState(resolved);
+  }, []);
+
+  const applyCameraDirect = useCallback((cam: Camera) => {
+    cameraRef.current = cam;
+    const stage = konvaStageRef.current;
+    if (stage) {
+      stage.position({ x: cam.x, y: cam.y });
+      stage.scale({ x: cam.scale, y: cam.scale });
+      stage.batchDraw();
+    }
+    const grid = dotGridRef.current;
+    if (grid) {
+      grid.style.backgroundPosition = `${cam.x}px ${cam.y}px`;
+      grid.style.backgroundSize = `${24 * cam.scale}px ${24 * cam.scale}px`;
+    }
+  }, []);
   const [remoteCursors, setRemoteCursors] = useState<RemoteCursor[]>([]);
   const [onlineUsers, setOnlineUsers] = useState<PresenceUser[]>([]);
   const [boardName, setBoardName] = useState("");
@@ -118,10 +183,20 @@ export default function CanvasPage() {
   const pendingDragMoveRef = useRef<{ id: string; x: number; y: number } | null>(null);
   const pendingResizeRef = useRef<{ id: string; box: ElementBox } | null>(null);
   const pendingRotateRef = useRef<{ id: string; rotation: number } | null>(null);
+  const pendingLiveEditTextRef = useRef<string | null>(null);
+  const pendingRemoteCursorsRef = useRef<RemoteCursor[] | null>(null);
   const dragMoveRafRef = useRef<number | null>(null);
   const resizeRafRef = useRef<number | null>(null);
   const rotateRafRef = useRef<number | null>(null);
+  const liveEditRafRef = useRef<number | null>(null);
+  const remoteCursorRafRef = useRef<number | null>(null);
   const perfElementIdRef = useRef<string | null>(null);
+  const konvaStageRef = useRef<Konva.Stage | null>(null);
+  const [isDrawing, setIsDrawing] = useState(false);
+
+  const handleStageRef = useCallback((stage: Konva.Stage | null) => {
+    konvaStageRef.current = stage;
+  }, []);
 
   const perfEnabled =
     process.env.NEXT_PUBLIC_ENABLE_PERF_PROBES === "1" ||
@@ -172,8 +247,17 @@ export default function CanvasPage() {
           if (!state.cursor) return;
           cursors.push({ clientId, cursor: state.cursor, user: state.user });
         });
-        setRemoteCursors(cursors);
         setOnlineUsers(users);
+        pendingRemoteCursorsRef.current = cursors;
+        if (remoteCursorRafRef.current === null) {
+          remoteCursorRafRef.current = requestAnimationFrame(() => {
+            remoteCursorRafRef.current = null;
+            if (pendingRemoteCursorsRef.current) {
+              setRemoteCursors(pendingRemoteCursorsRef.current);
+              pendingRemoteCursorsRef.current = null;
+            }
+          });
+        }
       },
       onConnectionStateChange: setConnectionState,
       onPerfProbe(probe) {
@@ -225,6 +309,7 @@ export default function CanvasPage() {
     type PerfTestApi = {
       getSummary: () => PerfSummary;
       sendCursorProbe: (count?: number) => Promise<void>;
+      sendObjectProbe: (count?: number) => Promise<void>;
       setSyntheticObjectCount: (count: number) => void;
       runPanZoomScript: (durationMs?: number) => Promise<void>;
       runInteractionScript: (steps?: number) => Promise<void>;
@@ -242,23 +327,39 @@ export default function CanvasPage() {
           });
         }
       },
+      sendObjectProbe: async (count = 100) => {
+        const connection = connectionRef.current;
+        if (!connection) return;
+        for (let index = 0; index < count; index++) {
+          connection.sendPerfProbe("object", `front-object-${Date.now()}-${index}`);
+          await new Promise<void>((resolve) => {
+            window.setTimeout(resolve, 0);
+          });
+        }
+      },
       setSyntheticObjectCount: (count: number) => {
         setSyntheticObjectCount(Math.max(0, Math.floor(count)));
       },
       runPanZoomScript: async (durationMs = 5000) => {
         const started = performance.now();
-        while (performance.now() - started < durationMs) {
-          const elapsed = performance.now() - started;
-          const scale = clamp(1 + Math.sin(elapsed / 300) * 0.3, MIN_SCALE, MAX_SCALE);
-          setCamera({
-            x: Math.sin(elapsed / 500) * 80,
-            y: Math.cos(elapsed / 400) * 60,
-            scale
-          });
-          await new Promise<void>((resolve) => {
-            window.setTimeout(resolve, 16);
-          });
-        }
+        await new Promise<void>((resolve) => {
+          const tick = () => {
+            const elapsed = performance.now() - started;
+            if (elapsed >= durationMs) {
+              setCameraState(cameraRef.current);
+              resolve();
+              return;
+            }
+            const scale = clamp(1 + Math.sin(elapsed / 300) * 0.3, MIN_SCALE, MAX_SCALE);
+            applyCameraDirect({
+              x: Math.sin(elapsed / 500) * 80,
+              y: Math.cos(elapsed / 400) * 60,
+              scale
+            });
+            requestAnimationFrame(tick);
+          };
+          requestAnimationFrame(tick);
+        });
       },
       runInteractionScript: async (steps = 180) => {
         const doc = docRef.current;
@@ -874,6 +975,9 @@ export default function CanvasPage() {
       if (rotateRafRef.current !== null) {
         window.cancelAnimationFrame(rotateRafRef.current);
       }
+      if (remoteCursorRafRef.current !== null) {
+        window.cancelAnimationFrame(remoteCursorRafRef.current);
+      }
     };
   }, []);
 
@@ -1244,27 +1348,73 @@ export default function CanvasPage() {
     [elements]
   );
 
+  const applyEditingTextToYjs = useCallback(
+    (nextText: string) => {
+      if (!editingElementId) return;
+      const doc = docRef.current;
+      if (!doc) return;
+
+      const elementsMap = doc.getMap("elements");
+      const elementMap = elementsMap.get(editingElementId) as Y.Map<unknown> | undefined;
+      if (!elementMap) return;
+
+      const elType = elementMap.get("type") as string | undefined;
+      const sanitizedText = stripHtmlTags(nextText).slice(0, 5000);
+      const key =
+        elType === "connector" && editingConnectorLabel
+          ? "labelText"
+          : elType === "frame"
+            ? "title"
+            : "text";
+      const value = key === "title" ? sanitizedText.slice(0, 200) : sanitizedText;
+      const prevValue = (elementMap.get(key) as string | undefined) ?? "";
+      if (prevValue === value) return;
+
+      doc.transact(() => {
+        elementMap.set(key, value);
+      });
+    },
+    [editingElementId, editingConnectorLabel]
+  );
+
+  const handleEditTextChange = useCallback(
+    (nextText: string) => {
+      setEditText(nextText);
+      pendingLiveEditTextRef.current = nextText;
+      if (liveEditRafRef.current !== null) return;
+      liveEditRafRef.current = requestAnimationFrame(() => {
+        liveEditRafRef.current = null;
+        const pendingText = pendingLiveEditTextRef.current;
+        pendingLiveEditTextRef.current = null;
+        if (pendingText !== null) {
+          applyEditingTextToYjs(pendingText);
+        }
+      });
+    },
+    [applyEditingTextToYjs]
+  );
+
   const commitEdit = useCallback(() => {
     if (!editingElementId) return;
-    const doc = docRef.current;
-    if (!doc) return;
-    const elementsMap = doc.getMap("elements");
-    const elementMap = elementsMap.get(editingElementId) as Y.Map<unknown> | undefined;
-    if (elementMap) {
-      const elType = elementMap.get("type") as string | undefined;
-      const sanitizedText = stripHtmlTags(editText).slice(0, 5000);
-      if (elType === "connector" && editingConnectorLabel) {
-        elementMap.set("labelText", sanitizedText);
-      } else if (elType === "frame") {
-        elementMap.set("title", sanitizedText.slice(0, 200));
-      } else {
-        elementMap.set("text", sanitizedText);
-      }
+    if (liveEditRafRef.current !== null) {
+      cancelAnimationFrame(liveEditRafRef.current);
+      liveEditRafRef.current = null;
+      pendingLiveEditTextRef.current = null;
     }
+    applyEditingTextToYjs(editText);
     setEditingElementId(null);
     setEditingConnectorLabel(false);
     setEditText("");
-  }, [editingElementId, editingConnectorLabel, editText]);
+  }, [editingElementId, editText, applyEditingTextToYjs]);
+
+  useEffect(() => {
+    if (editingElementId) return;
+    if (liveEditRafRef.current !== null) {
+      cancelAnimationFrame(liveEditRafRef.current);
+      liveEditRafRef.current = null;
+    }
+    pendingLiveEditTextRef.current = null;
+  }, [editingElementId]);
 
   // Focus textarea when editing starts
   useEffect(() => {
@@ -1352,9 +1502,10 @@ export default function CanvasPage() {
     const element = surfaceRef.current;
     if (!element) return { x: 0, y: 0 };
     const rect = element.getBoundingClientRect();
+    const cam = cameraRef.current;
     return {
-      x: (event.clientX - rect.left - camera.x) / camera.scale,
-      y: (event.clientY - rect.top - camera.y) / camera.scale
+      x: (event.clientX - rect.left - cam.x) / cam.scale,
+      y: (event.clientY - rect.top - cam.y) / cam.scale
     };
   };
 
@@ -1365,7 +1516,8 @@ export default function CanvasPage() {
     }
     if (event.button === 1 || isSpacebarPressedRef.current) {
       setIsPanning(true);
-      panStartRef.current = { x: event.clientX - camera.x, y: event.clientY - camera.y };
+      const cam = cameraRef.current;
+      panStartRef.current = { x: event.clientX - cam.x, y: event.clientY - cam.y };
       return;
     }
 
@@ -1386,6 +1538,7 @@ export default function CanvasPage() {
       const id = createRectangleDraft(world.x, world.y);
       if (id) {
         drawingShapeRef.current = { id, tool: "rectangle", start: world };
+        setIsDrawing(true);
       }
       return;
     }
@@ -1395,6 +1548,7 @@ export default function CanvasPage() {
       const id = createCircleDraft(world.x, world.y);
       if (id) {
         drawingShapeRef.current = { id, tool: "circle", start: world };
+        setIsDrawing(true);
       }
       return;
     }
@@ -1404,6 +1558,7 @@ export default function CanvasPage() {
       const id = createLineDraft(world.x, world.y);
       if (id) {
         drawingShapeRef.current = { id, tool: "line", start: world };
+        setIsDrawing(true);
       }
       return;
     }
@@ -1413,6 +1568,7 @@ export default function CanvasPage() {
       const id = createFrameDraft(world.x, world.y);
       if (id) {
         drawingShapeRef.current = { id, tool: "frame", start: world };
+        setIsDrawing(true);
       }
       return;
     }
@@ -1442,6 +1598,7 @@ export default function CanvasPage() {
           }
         }
         drawingShapeRef.current = { id, tool: "connector", start: startPt };
+        setIsDrawing(true);
       }
       return;
     }
@@ -1455,11 +1612,12 @@ export default function CanvasPage() {
     }
     if (isPanning && panStartRef.current) {
       const panStart = panStartRef.current;
-      setCamera((prev) => ({
-        ...prev,
+      const cam = cameraRef.current;
+      applyCameraDirect({
+        ...cam,
         x: event.clientX - panStart.x,
         y: event.clientY - panStart.y
-      }));
+      });
       return;
     }
     // Show snap anchors when hovering with connector tool (not drawing yet)
@@ -1538,9 +1696,13 @@ export default function CanvasPage() {
         }
       }
       drawingShapeRef.current = null;
+      setIsDrawing(false);
       setActiveTool("pointer");
       setConnectorSnapAnchors([]);
       setConnectorSnapTarget(null);
+    }
+    if (isPanning) {
+      setCameraState(cameraRef.current);
     }
     setIsPanning(false);
     panStartRef.current = null;
@@ -1549,6 +1711,7 @@ export default function CanvasPage() {
   const onOverlayPointerLeave = () => {
     if (drawingShapeRef.current) {
       drawingShapeRef.current = null;
+      setIsDrawing(false);
       setActiveTool("pointer");
     }
     setConnectorSnapAnchors([]);
@@ -1560,14 +1723,14 @@ export default function CanvasPage() {
   const onSectionPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (isPointerMode && (event.button === 1 || isSpacebarPressedRef.current)) {
       setIsPanning(true);
-      panStartRef.current = { x: event.clientX - camera.x, y: event.clientY - camera.y };
+      const cam = cameraRef.current;
+      panStartRef.current = { x: event.clientX - cam.x, y: event.clientY - cam.y };
       marqueeStartRef.current = null;
       setMarqueeRect(null);
     }
   };
 
   const onSectionPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
-    // Keep this in a ref so pointer movement does not re-render the full page.
     pointerPositionRef.current = { x: event.clientX, y: event.clientY };
     
     if (perfEnabled) {
@@ -1575,15 +1738,19 @@ export default function CanvasPage() {
     }
     if (isPanning && panStartRef.current) {
       const panStart = panStartRef.current;
-      setCamera((prev) => ({
-        ...prev,
+      const cam = cameraRef.current;
+      applyCameraDirect({
+        ...cam,
         x: event.clientX - panStart.x,
         y: event.clientY - panStart.y
-      }));
+      });
     }
   };
 
   const onSectionPointerUp = () => {
+    if (isPanning) {
+      setCameraState(cameraRef.current);
+    }
     setIsPanning(false);
     panStartRef.current = null;
   };
@@ -1600,19 +1767,21 @@ export default function CanvasPage() {
     const mouseX = event.clientX - rect.left;
     const mouseY = event.clientY - rect.top;
 
+    const cam = cameraRef.current;
     const nextScale = clamp(
-      camera.scale * (event.deltaY > 0 ? 0.9 : 1.1),
+      cam.scale * (event.deltaY > 0 ? 0.9 : 1.1),
       MIN_SCALE,
       MAX_SCALE
     );
 
-    // Keep the world point under the cursor fixed
-    const worldX = (mouseX - camera.x) / camera.scale;
-    const worldY = (mouseY - camera.y) / camera.scale;
+    const worldX = (mouseX - cam.x) / cam.scale;
+    const worldY = (mouseY - cam.y) / cam.scale;
     const newX = mouseX - worldX * nextScale;
     const newY = mouseY - worldY * nextScale;
 
-    setCamera({ x: newX, y: newY, scale: nextScale });
+    const newCam = { x: newX, y: newY, scale: nextScale };
+    applyCameraDirect(newCam);
+    setCameraState(newCam);
   };
 
   // Compute editing element position for text overlay
@@ -1749,6 +1918,7 @@ export default function CanvasPage() {
       >
         {/* Dot grid background */}
         <div
+          ref={dotGridRef}
           className="absolute inset-0 bg-[radial-gradient(circle,rgba(255,255,255,0.1)_1px,transparent_1px)]"
           style={{
             backgroundPosition: `${camera.x}px ${camera.y}px`,
@@ -1763,6 +1933,7 @@ export default function CanvasPage() {
           elements={elements}
           activeTool={activeTool}
           getFrameChildIdsFn={getFrameChildIdsFromYjs}
+          onStageRef={handleStageRef}
           onSelectElement={selectElement}
           onDragElementStart={() => setIsDraggingElement(true)}
           onDragElementMove={onDragElementMove}
@@ -1773,6 +1944,7 @@ export default function CanvasPage() {
           onRotateCursorChange={setRotationCursor}
           onDblClickElement={startEditing}
           editingElementId={editingElementId}
+          editingConnectorLabel={editingConnectorLabel}
           onLineEndpointDrag={moveLineEndpoint}
           onLineEndpointDragEnd={moveLineEndpoint}
           onConnectorEndpointDrag={(id, endpoint, wx, wy) => {
@@ -1840,31 +2012,7 @@ export default function CanvasPage() {
         />
 
         {/* Remote cursor overlay */}
-        <div className="absolute inset-0 pointer-events-none z-10">
-          {remoteCursors.map((remote) => (
-            <div
-              key={remote.clientId}
-              className="absolute -translate-x-0.5 -translate-y-0.5"
-              style={{
-                left: remote.cursor.x * camera.scale + camera.x,
-                top: remote.cursor.y * camera.scale + camera.y
-              }}
-            >
-              <svg className="w-[22px] h-[22px] block" viewBox="0 0 24 24" fill="none" aria-hidden>
-                <path
-                  d="M4 3L4 20L9.5 14.8L13 21L16.3 19.2L12.8 13L20 13L4 3Z"
-                  fill={remote.user.color}
-                  stroke="white"
-                  strokeWidth="1.5"
-                  strokeLinejoin="round"
-                />
-              </svg>
-              <span className="mt-1 inline-block px-1.5 py-0.5 rounded-md bg-[#121212]/85 border border-[#3a3a3a] text-xs whitespace-nowrap">
-                {remote.user.name}
-              </span>
-            </div>
-          ))}
-        </div>
+        <RemoteCursorOverlay remoteCursors={remoteCursors} camera={camera} />
 
         {/* Selection toolbar - floating above selected element */}
         {selectedElement && (!editingElementId || editingConnectorLabel) && !isDraggingElement && (
@@ -1890,7 +2038,7 @@ export default function CanvasPage() {
                 ref={textareaRef as unknown as React.RefObject<HTMLInputElement>}
                 type="text"
                 value={editText}
-                onChange={(e) => setEditText(e.target.value)}
+                onChange={(e) => handleEditTextChange(e.target.value)}
                 onBlur={commitEdit}
                 onKeyDown={(e) => {
                   if (e.key === "Escape" || e.key === "Enter") {
@@ -1917,7 +2065,7 @@ export default function CanvasPage() {
                 ref={textareaRef as unknown as React.RefObject<HTMLInputElement>}
                 type="text"
                 value={editText}
-                onChange={(e) => setEditText(e.target.value)}
+                onChange={(e) => handleEditTextChange(e.target.value)}
                 onBlur={commitEdit}
                 onKeyDown={(e) => {
                   if (e.key === "Escape" || e.key === "Enter") {
@@ -1944,7 +2092,7 @@ export default function CanvasPage() {
               <textarea
                 ref={textareaRef}
                 value={editText}
-                onChange={(e) => setEditText(e.target.value)}
+                onChange={(e) => handleEditTextChange(e.target.value)}
                 onBlur={commitEdit}
                 onKeyDown={(e) => {
                   if (e.key === "Escape") {
@@ -1994,6 +2142,22 @@ export default function CanvasPage() {
             pointerRef={pointerPositionRef}
             corner={rotationCursor.corner}
             elementRotation={rotationCursor.elementRotation}
+          />
+        )}
+
+        {/* Debug metrics overlay (dev only) */}
+        {process.env.NODE_ENV === "development" && (
+          <DebugMetrics
+            camera={camera}
+            elements={elements}
+            activeTool={activeTool}
+            isPanning={isPanning}
+            isDraggingElement={isDraggingElement}
+            isDrawing={isDrawing}
+            editingElementId={editingElementId}
+            pointerPositionRef={pointerPositionRef}
+            surfaceRef={surfaceRef}
+            stageRef={konvaStageRef}
           />
         )}
       </section>

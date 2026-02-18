@@ -1,5 +1,6 @@
 "use client";
 
+import { memo } from "react";
 import { Line } from "react-konva";
 
 import type { LineElement } from "@collab/shared/collab";
@@ -8,7 +9,7 @@ type LineContentProps = {
   element: LineElement;
 };
 
-export function LineContent({ element }: LineContentProps) {
+export const LineContent = memo(function LineContent({ element }: LineContentProps) {
   const points =
     element.points.length >= 4
       ? element.points
@@ -24,4 +25,4 @@ export function LineContent({ element }: LineContentProps) {
       hitStrokeWidth={Math.max(element.strokeWidth, 12)}
     />
   );
-}
+});

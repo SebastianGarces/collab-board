@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useEffect, useState } from "react";
+import { memo, useMemo, useRef, useEffect, useState } from "react";
 import { Group, Line, Path, Rect, Text } from "react-konva";
 import type Konva from "konva";
 
@@ -66,7 +66,7 @@ function HiddenOverlay({ width, height }: { width: number; height: number }) {
   );
 }
 
-export function FrameContent({ element, isEditing = false, isDropTarget = false }: FrameContentProps) {
+export const FrameContent = memo(function FrameContent({ element, isEditing = false, isDropTarget = false }: FrameContentProps) {
   const hasBorder = element.strokeStyle !== "none";
   const dashArray =
     element.strokeStyle === "dashed" ? [8, 5] : undefined;
@@ -118,6 +118,7 @@ export function FrameContent({ element, isEditing = false, isDropTarget = false 
         strokeWidth={hasBorder ? 3 : 0}
         dash={dashArray}
         cornerRadius={2}
+        perfectDrawEnabled={false}
       />
       {/* Hidden overlay */}
       {element.hidden && (
@@ -139,5 +140,4 @@ export function FrameContent({ element, isEditing = false, isDropTarget = false 
       )}
     </>
   );
-}
-
+});

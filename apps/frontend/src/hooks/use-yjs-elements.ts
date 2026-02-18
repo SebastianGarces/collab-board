@@ -258,31 +258,18 @@ export function useYjsElements(doc: Y.Doc | null): BoardElement[] {
       setElements(next);
     };
 
-    const syncIncremental = (events: Y.YEvent<Y.AbstractType<any>>[]) => {
-      const changedIds = new Set<string>();
-      let orderMayHaveChanged = false;
+    let pendingChangedIds = new Set<string>();
+    let pendingOrderChange = false;
+    let rafId = 0;
 
-      for (const event of events) {
-        const keyPath = event.path?.[0];
-        if (typeof keyPath === "string") {
-          changedIds.add(keyPath);
-        }
+    const flushPending = () => {
+      rafId = 0;
+      const changedIds = pendingChangedIds;
+      const orderMayHaveChanged = pendingOrderChange;
+      pendingChangedIds = new Set();
+      pendingOrderChange = false;
 
-        if (event.target === elementsMap) {
-          orderMayHaveChanged = true;
-          if ("keysChanged" in event && event.keysChanged instanceof Set) {
-            for (const key of event.keysChanged) {
-              if (typeof key === "string") {
-                changedIds.add(key);
-              }
-            }
-          }
-        }
-      }
-
-      if (changedIds.size === 0 && !orderMayHaveChanged) {
-        return;
-      }
+      if (changedIds.size === 0 && !orderMayHaveChanged) return;
 
       const nextOrder = orderMayHaveChanged ? buildOrder() : orderRef.current;
       if (nextOrder.length === 0) {
@@ -317,10 +304,37 @@ export function useYjsElements(doc: Y.Doc | null): BoardElement[] {
       });
     };
 
+    const syncIncremental = (events: Y.YEvent<Y.AbstractType<any>>[]) => {
+      for (const event of events) {
+        const keyPath = event.path?.[0];
+        if (typeof keyPath === "string") {
+          pendingChangedIds.add(keyPath);
+        }
+
+        if (event.target === elementsMap) {
+          pendingOrderChange = true;
+          if ("keysChanged" in event && event.keysChanged instanceof Set) {
+            for (const key of event.keysChanged) {
+              if (typeof key === "string") {
+                pendingChangedIds.add(key);
+              }
+            }
+          }
+        }
+      }
+
+      if (rafId === 0) {
+        rafId = requestAnimationFrame(flushPending);
+      }
+    };
+
     syncAll();
     elementsMap.observeDeep(syncIncremental);
     return () => {
       elementsMap.unobserveDeep(syncIncremental);
+      if (rafId !== 0) {
+        cancelAnimationFrame(rafId);
+      }
     };
   }, [doc]);
 

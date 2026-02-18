@@ -110,16 +110,21 @@ export function findSnapTarget(
  * looking up connected elements if fromId/toId is set.
  * Uses the stored anchor index (0=top, 1=right, 2=bottom, 3=left)
  * to respect the user's explicit anchor choice.
+ * Accepts either an array or a Map for element lookup.
  */
 export function resolveEndpoints(
   connector: ConnectorElement,
-  elements: BoardElement[],
+  elements: BoardElement[] | Map<string, BoardElement>,
 ): { from: Point; to: Point } {
+  const lookup = elements instanceof Map
+    ? (id: string) => elements.get(id)
+    : (id: string) => elements.find((e) => e.id === id);
+
   let from: Point = { x: connector.fromX, y: connector.fromY };
   let to: Point = { x: connector.toX, y: connector.toY };
 
   if (connector.fromId) {
-    const fromEl = elements.find((e) => e.id === connector.fromId);
+    const fromEl = lookup(connector.fromId);
     if (fromEl) {
       const anchors = getEdgeAnchors(fromEl);
       const idx = connector.fromAnchor;
@@ -130,7 +135,7 @@ export function resolveEndpoints(
   }
 
   if (connector.toId) {
-    const toEl = elements.find((e) => e.id === connector.toId);
+    const toEl = lookup(connector.toId);
     if (toEl) {
       const anchors = getEdgeAnchors(toEl);
       const idx = connector.toAnchor;

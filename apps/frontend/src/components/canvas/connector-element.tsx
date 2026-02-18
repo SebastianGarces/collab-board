@@ -1,5 +1,6 @@
 "use client";
 
+import { memo, useMemo } from "react";
 import { Line, Path, Rect, Text } from "react-konva";
 
 import type { BoardElement, ConnectorElement } from "@collab/shared/collab";
@@ -15,6 +16,8 @@ import {
 type ConnectorContentProps = {
   element: ConnectorElement;
   elements: BoardElement[];
+  elementsById?: Map<string, BoardElement>;
+  isLabelEditing?: boolean;
   onLabelClick?: () => void;
 };
 
@@ -38,19 +41,27 @@ function pathPointsToSvg(points: number[]): string {
   return d;
 }
 
-export function ConnectorContent({ element, elements, onLabelClick }: ConnectorContentProps) {
-  const { from, to } = resolveEndpoints(element, elements);
-  let absPathPoints = computePath(from, to, element.routingStyle, element.elbowMidpoint, element.fromAnchor, element.toAnchor);
+export const ConnectorContent = memo(function ConnectorContent({
+  element,
+  elements,
+  elementsById,
+  isLabelEditing = false,
+  onLabelClick,
+}: ConnectorContentProps) {
+  const lookupSource = elementsById ?? elements;
 
-  // Obstacle avoidance for orthogonal routing (skip if user set manual midpoint)
-  if (element.routingStyle === "orthogonal" && element.elbowMidpoint == null) {
-    absPathPoints = avoidObstacles(absPathPoints, element, elements);
-  }
+  const pathPoints = useMemo(() => {
+    const { from, to } = resolveEndpoints(element, lookupSource);
+    let absPath = computePath(from, to, element.routingStyle, element.elbowMidpoint, element.fromAnchor, element.toAnchor);
 
-  // Offset to local coordinates (InteractiveShape Group is at element.x, element.y)
-  const ox = element.x;
-  const oy = element.y;
-  const pathPoints = absPathPoints.map((v, i) => (i % 2 === 0 ? v - ox : v - oy));
+    if (element.routingStyle === "orthogonal" && element.elbowMidpoint == null) {
+      absPath = avoidObstacles(absPath, element, elements);
+    }
+
+    const ox = element.x;
+    const oy = element.y;
+    return absPath.map((v, i) => (i % 2 === 0 ? v - ox : v - oy));
+  }, [element, elements, lookupSource]);
 
   const dash = getDash(element.dashStyle, element.strokeWidth);
 
@@ -137,7 +148,7 @@ export function ConnectorContent({ element, elements, onLabelClick }: ConnectorC
       )}
 
       {/* Text label at path midpoint (already in local coords) */}
-      {element.labelText.trim() !== "" && (() => {
+      {!isLabelEditing && element.labelText.trim() !== "" && (() => {
         const midpoint = getPathMidpoint(pathPoints);
         const labelPadding = 4;
         const estimatedWidth = element.labelText.length * element.labelFontSize * 0.55 + labelPadding * 2;
@@ -176,4 +187,4 @@ export function ConnectorContent({ element, elements, onLabelClick }: ConnectorC
       })()}
     </>
   );
-}
+});

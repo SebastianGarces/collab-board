@@ -1,5 +1,6 @@
 "use client";
 
+import { memo } from "react";
 import type { KonvaEventObject } from "konva/lib/Node";
 import { Circle } from "react-konva";
 
@@ -28,7 +29,7 @@ function getWorldPointer(event: KonvaEventObject<DragEvent>): { x: number; y: nu
   };
 }
 
-export function ConnectorEndpointHandles({
+export const ConnectorEndpointHandles = memo(function ConnectorEndpointHandles({
   element,
   elements,
   zoomScale,
@@ -95,4 +96,4 @@ export function ConnectorEndpointHandles({
       ))}
     </>
   );
-}
+});

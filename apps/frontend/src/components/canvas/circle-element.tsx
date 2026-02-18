@@ -1,5 +1,6 @@
 "use client";
 
+import { memo } from "react";
 import { Ellipse } from "react-konva";
 
 import type { CircleElement } from "@collab/shared/collab";
@@ -8,7 +9,7 @@ type CircleContentProps = {
   element: CircleElement;
 };
 
-export function CircleContent({ element }: CircleContentProps) {
+export const CircleContent = memo(function CircleContent({ element }: CircleContentProps) {
   return (
     <Ellipse
       x={element.width / 2}
@@ -18,6 +19,7 @@ export function CircleContent({ element }: CircleContentProps) {
       fill={element.fill}
       stroke={element.stroke}
       strokeWidth={2}
+      perfectDrawEnabled={false}
     />
   );
-}
+});

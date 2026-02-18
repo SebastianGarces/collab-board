@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import type Konva from "konva";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Circle as KonvaCircle, Layer, Rect, Stage } from "react-konva";
 
 import type { BoardElement, ConnectorElement, FrameElement } from "@collab/shared/collab";
@@ -51,9 +52,11 @@ type BoardCanvasProps = {
   onMarqueeSelect?: (ids: string[]) => void;
   marqueeRect?: { x: number; y: number; width: number; height: number } | null;
   editingElementId?: string | null;
+  editingConnectorLabel?: boolean;
   connectorSnapAnchors?: { x: number; y: number }[];
   connectorSnapTarget?: { x: number; y: number } | null;
   getFrameChildIdsFn?: (frameId: string) => string[];
+  onStageRef?: (stage: Konva.Stage | null) => void;
 };
 
 export function BoardCanvas({
@@ -82,11 +85,17 @@ export function BoardCanvas({
   onStagePointerUp,
   marqueeRect = null,
   editingElementId = null,
+  editingConnectorLabel = false,
   connectorSnapAnchors = [],
   connectorSnapTarget = null,
   getFrameChildIdsFn,
+  onStageRef,
 }: BoardCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const stageCallbackRef = useCallback(
+    (node: Konva.Stage | null) => { onStageRef?.(node); },
+    [onStageRef],
+  );
   const [size, setSize] = useState({ width: 0, height: 0 });
 
   const selectedElementIds = useCanvasStore((s) => s.selectedElementIds);
@@ -212,39 +221,114 @@ export function BoardCanvas({
   const isPointerMode = activeTool === "pointer";
   const draggable = isPointerMode;
 
-  const handleSelect = (id: string, shiftKey: boolean) => {
-    onSelectElement?.(id, shiftKey);
-  };
+  // Store callback props in refs so useCallback wrappers remain stable
+  const onSelectElementRef = useRef(onSelectElement);
+  onSelectElementRef.current = onSelectElement;
+  const onDragElementRef = useRef(onDragElement);
+  onDragElementRef.current = onDragElement;
+  const onDragSelectedElementsRef = useRef(onDragSelectedElements);
+  onDragSelectedElementsRef.current = onDragSelectedElements;
+  const onResizeElementRef = useRef(onResizeElement);
+  onResizeElementRef.current = onResizeElement;
+  const onRotateElementRef = useRef(onRotateElement);
+  onRotateElementRef.current = onRotateElement;
+  const onDblClickElementRef = useRef(onDblClickElement);
+  onDblClickElementRef.current = onDblClickElement;
+  const elementsByIdRef = useRef(elementsById);
+  elementsByIdRef.current = elementsById;
+  const frameElementsRef = useRef(frameElements);
+  frameElementsRef.current = frameElements;
+  const frameChildIdsByFrameRef = useRef(frameChildIdsByFrame);
+  frameChildIdsByFrameRef.current = frameChildIdsByFrame;
 
-  const handleMultiDragEnd = (draggedId: string, newX: number, newY: number) => {
+  const handleSelect = useCallback((id: string, shiftKey: boolean) => {
+    onSelectElementRef.current?.(id, shiftKey);
+  }, []);
+
+  const handleMultiDragEnd = useCallback((draggedId: string, newX: number, newY: number) => {
     setDropTargetFrameId(null);
-    const el = elementsById.get(draggedId);
+    const el = elementsByIdRef.current.get(draggedId);
     if (!el) return;
     const deltaX = newX - el.x;
     const deltaY = newY - el.y;
-    if (selectedElementIds.size > 1 && selectedElementIds.has(draggedId)) {
-      onDragSelectedElements?.(deltaX, deltaY);
+    const store = useCanvasStore.getState();
+    if (store.selectedElementIds.size > 1 && store.selectedElementIds.has(draggedId)) {
+      onDragSelectedElementsRef.current?.(deltaX, deltaY);
     } else {
-      onDragElement?.(draggedId, newX, newY);
+      onDragElementRef.current?.(draggedId, newX, newY);
     }
-  };
+  }, [setDropTargetFrameId]);
 
-  const handleResize = (id: string, box: ElementBox) => {
-    onResizeElement?.(id, box);
-  };
+  const handleResize = useCallback((id: string, box: ElementBox) => {
+    onResizeElementRef.current?.(id, box);
+  }, []);
 
-  const handleRotate = (id: string, rotation: number) => {
-    onRotateElement?.(id, rotation);
-  };
+  const handleRotate = useCallback((id: string, rotation: number) => {
+    onRotateElementRef.current?.(id, rotation);
+  }, []);
 
-  const handleDblClick = (id: string) => {
-    onDblClickElement?.(id);
-  };
+  const handleDblClick = useCallback((id: string) => {
+    onDblClickElementRef.current?.(id);
+  }, []);
+
+  const handleGetDragChildIds = useCallback((frameId: string) => {
+    return frameChildIdsByFrameRef.current.get(frameId) ?? [];
+  }, []);
+
+  const handleDragPositionUpdate = useCallback((x: number, y: number, elWidth: number, elHeight: number) => {
+    const cx = x + elWidth / 2;
+    const cy = y + elHeight / 2;
+    const target = findFrameAtPoint(cx, cy, frameElementsRef.current);
+    setDropTargetFrameId(target);
+  }, [setDropTargetFrameId]);
+
+  const onStagePointerDownRef = useRef(onStagePointerDown);
+  onStagePointerDownRef.current = onStagePointerDown;
+  const onStagePointerMoveRef = useRef(onStagePointerMove);
+  onStagePointerMoveRef.current = onStagePointerMove;
+  const onStagePointerUpRef = useRef(onStagePointerUp);
+  onStagePointerUpRef.current = onStagePointerUp;
+  const cameraRef = useRef(camera);
+  cameraRef.current = camera;
+  const isPointerModeRef = useRef(isPointerMode);
+  isPointerModeRef.current = isPointerMode;
+
+  const handleStagePointerDown = useCallback((e: Konva.KonvaEventObject<PointerEvent>) => {
+    if (!isPointerModeRef.current) return;
+    const stage = e.target.getStage();
+    if (!stage) return;
+    if (e.target === stage) {
+      const pos = stage.getPointerPosition();
+      if (!pos) return;
+      const cam = cameraRef.current;
+      const worldX = (pos.x - cam.x) / cam.scale;
+      const worldY = (pos.y - cam.y) / cam.scale;
+      onStagePointerDownRef.current?.(worldX, worldY);
+    }
+  }, []);
+
+  const handleStagePointerMove = useCallback((e: Konva.KonvaEventObject<PointerEvent>) => {
+    if (!isPointerModeRef.current) return;
+    const stage = e.target.getStage();
+    if (!stage) return;
+    const pos = stage.getPointerPosition();
+    if (!pos) return;
+    const cam = cameraRef.current;
+    const worldX = (pos.x - cam.x) / cam.scale;
+    const worldY = (pos.y - cam.y) / cam.scale;
+    onStagePointerMoveRef.current?.(worldX, worldY);
+  }, []);
+
+  const handleStagePointerUp = useCallback(() => {
+    if (!isPointerModeRef.current) return;
+    onStagePointerUpRef.current?.();
+  }, []);
 
   return (
     <div ref={containerRef} className="absolute inset-0">
       {size.width > 0 && size.height > 0 && (
         <Stage
+          ref={stageCallbackRef}
           width={size.width}
           height={size.height}
           x={camera.x}
@@ -252,53 +336,32 @@ export function BoardCanvas({
           scaleX={camera.scale}
           scaleY={camera.scale}
           listening={isPointerMode}
-          onPointerDown={(e) => {
-            if (!isPointerMode) return;
-            const stage = e.target.getStage();
-            if (!stage) return;
-            if (e.target === stage) {
-              const pos = stage.getPointerPosition();
-              if (!pos) return;
-              const worldX = (pos.x - camera.x) / camera.scale;
-              const worldY = (pos.y - camera.y) / camera.scale;
-              onStagePointerDown?.(worldX, worldY);
-            }
-          }}
-          onPointerMove={(e) => {
-            if (!isPointerMode) return;
-            const stage = e.target.getStage();
-            if (!stage) return;
-            const pos = stage.getPointerPosition();
-            if (!pos) return;
-            const worldX = (pos.x - camera.x) / camera.scale;
-            const worldY = (pos.y - camera.y) / camera.scale;
-            onStagePointerMove?.(worldX, worldY);
-          }}
-          onPointerUp={() => {
-            if (!isPointerMode) return;
-            onStagePointerUp?.();
-          }}
+          onPointerDown={handleStagePointerDown}
+          onPointerMove={handleStagePointerMove}
+          onPointerUp={handleStagePointerUp}
         >
+          {syntheticObjectCount > 0 && (
+            <Layer listening={false}>
+              {Array.from({ length: syntheticObjectCount }).map((_, index) => {
+                const row = Math.floor(index / 25);
+                const col = index % 25;
+                return (
+                  <Rect
+                    key={`synthetic-${index}`}
+                    x={col * 56}
+                    y={row * 36}
+                    width={48}
+                    height={28}
+                    cornerRadius={4}
+                    fill={index % 2 === 0 ? "#2f7aeb" : "#55c2a0"}
+                    opacity={0.8}
+                    listening={false}
+                  />
+                );
+              })}
+            </Layer>
+          )}
           <Layer>
-            {/* Synthetic objects for perf testing */}
-            {Array.from({ length: syntheticObjectCount }).map((_, index) => {
-              const row = Math.floor(index / 25);
-              const col = index % 25;
-              return (
-                <Rect
-                  key={`synthetic-${index}`}
-                  x={col * 56}
-                  y={row * 36}
-                  width={48}
-                  height={28}
-                  cornerRadius={4}
-                  fill={index % 2 === 0 ? "#2f7aeb" : "#55c2a0"}
-                  opacity={0.8}
-                  listening={false}
-                />
-              );
-            })}
-
             {/* Real board elements (frames first, then connectors, then non-frames; hidden children filtered out) */}
             {visibleElements.map((el) => {
               const isLine = el.type === "line";
@@ -327,25 +390,24 @@ export function BoardCanvas({
                   hideSelectionOutline={isLine || isConnector}
                   getDragChildIds={
                     el.type === "frame"
-                      ? () => frameChildIdsByFrame.get(el.id) ?? []
+                      ? () => handleGetDragChildIds(el.id)
                       : undefined
                   }
                   onDragPositionUpdate={
                     !isFrame
-                      ? (x, y) => {
-                          const cx = x + el.width / 2;
-                          const cy = y + el.height / 2;
-                          const target = findFrameAtPoint(cx, cy, frameElements);
-                          setDropTargetFrameId(target);
-                        }
+                      ? (x, y) => handleDragPositionUpdate(x, y, el.width, el.height)
                       : undefined
                   }
                 >
-                  {el.type === "sticky-note" && <StickyNote element={el} />}
+                  {el.type === "sticky-note" && (
+                    <StickyNote element={el} isEditing={el.id === editingElementId} />
+                  )}
                   {el.type === "rectangle" && <RectangleContent element={el} />}
                   {el.type === "circle" && <CircleContent element={el} />}
                   {el.type === "line" && <LineContent element={el} />}
-                  {el.type === "text" && <TextContent element={el} />}
+                  {el.type === "text" && (
+                    <TextContent element={el} isEditing={el.id === editingElementId} />
+                  )}
                   {el.type === "frame" && (
                     <FrameContent
                       element={el}
@@ -357,6 +419,8 @@ export function BoardCanvas({
                     <ConnectorContent
                       element={el}
                       elements={elements}
+                      elementsById={elementsById}
+                      isLabelEditing={editingConnectorLabel && el.id === editingElementId}
                       onLabelClick={
                         isSelected && el.labelText.trim() !== ""
                           ? () => onConnectorLabelClick?.(el.id)

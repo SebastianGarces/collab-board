@@ -1,5 +1,6 @@
 "use client";
 
+import { memo } from "react";
 import type { KonvaEventObject } from "konva/lib/Node";
 import { Circle } from "react-konva";
 
@@ -26,7 +27,7 @@ function getWorldPointer(event: KonvaEventObject<DragEvent>): Pointer | null {
   };
 }
 
-export function LineEndpointHandles({
+export const LineEndpointHandles = memo(function LineEndpointHandles({
   points,
   zoomScale,
   onEndpointDragStart,
@@ -89,4 +90,4 @@ export function LineEndpointHandles({
       ))}
     </>
   );
-}
+});

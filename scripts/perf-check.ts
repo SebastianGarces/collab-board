@@ -25,9 +25,8 @@ type FrontendSummary = {
   canvasLongFramesPerMinute: number;
   inputToRenderMs: { p95: number };
   probeLatencyMs: {
-    cursor: {
-      p95: number;
-    };
+    cursor: { p95: number; p99: number };
+    object: { p95: number; p99: number };
   };
 };
 
@@ -74,15 +73,40 @@ async function main() {
       `frontend cursor p95 ${frontend.probeLatencyMs.cursor.p95.toFixed(2)}ms > ${budgets.thresholds.cursorSyncLatencyMs.p95Max}ms`
     );
   }
-  if (frontend.canvasLongFramesPerMinute > budgets.thresholds.canvasLongFramesPerMinute.max) {
+  if (frontend.probeLatencyMs.object.p95 > budgets.thresholds.objectSyncLatencyMs.p95Max) {
     failures.push(
-      `frontend long frames/min ${frontend.canvasLongFramesPerMinute.toFixed(2)} > ${budgets.thresholds.canvasLongFramesPerMinute.max}`
+      `frontend object p95 ${frontend.probeLatencyMs.object.p95.toFixed(2)}ms > ${budgets.thresholds.objectSyncLatencyMs.p95Max}ms`
     );
   }
   if (frontend.inputToRenderMs.p95 > budgets.thresholds.inputToRenderMs.p95Max) {
     failures.push(
       `frontend input->render p95 ${frontend.inputToRenderMs.p95.toFixed(2)}ms > ${budgets.thresholds.inputToRenderMs.p95Max}ms`
     );
+  }
+
+  // Soft warnings per performance-budgets.md (tracked but do not fail CI)
+  const warnings: string[] = [];
+  if (frontend.canvasLongFramesPerMinute > budgets.thresholds.canvasLongFramesPerMinute.max) {
+    warnings.push(
+      `frontend long frames/min ${frontend.canvasLongFramesPerMinute.toFixed(2)} > ${budgets.thresholds.canvasLongFramesPerMinute.max}`
+    );
+  }
+  if (frontend.probeLatencyMs.cursor.p99 > 75) {
+    warnings.push(
+      `frontend cursor p99 ${frontend.probeLatencyMs.cursor.p99.toFixed(2)}ms > 75ms`
+    );
+  }
+  if (frontend.probeLatencyMs.object.p99 > 150) {
+    warnings.push(
+      `frontend object p99 ${frontend.probeLatencyMs.object.p99.toFixed(2)}ms > 150ms`
+    );
+  }
+
+  if (warnings.length) {
+    console.warn("[perf] soft budget warnings:");
+    for (const w of warnings) {
+      console.warn(`  - ${w}`);
+    }
   }
 
   if (failures.length) {
@@ -94,7 +118,7 @@ async function main() {
     return;
   }
 
-  console.info("[perf] all performance budgets passed.");
+  console.info("[perf] all hard performance budgets passed.");
 }
 
 main().catch((error) => {

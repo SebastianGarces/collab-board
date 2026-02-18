@@ -1,5 +1,6 @@
 "use client";
 
+import { memo } from "react";
 import { Circle, Rect } from "react-konva";
 import type { KonvaEventObject } from "konva/lib/Node";
 
@@ -67,7 +68,7 @@ function getRotatedCursor(handle: ResizeHandle, rotation: number): string {
 type RotationCorner = "nw" | "ne" | "se" | "sw";
 const ROTATION_CORNERS: RotationCorner[] = ["nw", "ne", "se", "sw"];
 
-export function ShapeResizeHandles({
+export const ShapeResizeHandles = memo(function ShapeResizeHandles({
   box,
   rotation,
   zoomScale,
@@ -213,5 +214,4 @@ export function ShapeResizeHandles({
       })}
     </>
   );
-}
-
+});
