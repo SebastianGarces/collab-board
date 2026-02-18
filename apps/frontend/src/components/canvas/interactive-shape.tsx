@@ -39,6 +39,8 @@ type InteractiveShapeProps = {
   onDblClick?: (id: string) => void;
   hideSelectionOutline?: boolean;
   getDragChildIds?: () => string[];
+  onGroupDragStart?: () => void;
+  onGroupDragMove?: (dx: number, dy: number) => void;
   onDragPositionUpdate?: (x: number, y: number) => void;
   children: ReactNode;
 };
@@ -60,6 +62,8 @@ function InteractiveShapeComponent({
   onDblClick,
   hideSelectionOutline = false,
   getDragChildIds,
+  onGroupDragStart,
+  onGroupDragMove,
   onDragPositionUpdate,
   children,
 }: InteractiveShapeProps) {
@@ -206,6 +210,7 @@ function InteractiveShapeComponent({
         const topLeftY = e.target.y() - element.height / 2;
         const childIds = getDragChildIds?.() ?? [];
         startGroupDrag(element.id, topLeftX, topLeftY, childIds);
+        onGroupDragStart?.();
         onDragStart?.(element.id);
       }}
       onDragMove={(e) => {
@@ -216,16 +221,17 @@ function InteractiveShapeComponent({
           const dx = topLeftX - groupDrag.startX;
           const dy = topLeftY - groupDrag.startY;
           updateGroupDrag(dx, dy);
+          onGroupDragMove?.(dx, dy);
         } else {
           onDragMove?.(element.id, topLeftX, topLeftY);
         }
         onDragPositionUpdate?.(topLeftX, topLeftY);
       }}
       onDragEnd={(e) => {
-        endGroupDrag();
         const finalTopLeftX = e.target.x() - element.width / 2;
         const finalTopLeftY = e.target.y() - element.height / 2;
         onDragEnd(element.id, finalTopLeftX, finalTopLeftY);
+        requestAnimationFrame(() => endGroupDrag());
       }}
       onMouseEnter={(e) => {
         const targetName = e.target.name?.();

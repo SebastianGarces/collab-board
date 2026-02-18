@@ -139,7 +139,11 @@ function Row({ label, value, highlight }: { label: string; value: string | numbe
   return (
     <div className="flex justify-between gap-6">
       <span>{label}</span>
-      <span className={highlight ? "text-[#4ade80]" : "text-[#ccc]"}>{value}</span>
+      <span
+        className={`min-w-[10ch] text-right ${highlight ? "text-[#4ade80]" : "text-[#ccc]"}`}
+      >
+        {value}
+      </span>
     </div>
   );
 }

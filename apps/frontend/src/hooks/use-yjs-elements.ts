@@ -304,7 +304,8 @@ export function useYjsElements(doc: Y.Doc | null): BoardElement[] {
       });
     };
 
-    const syncIncremental = (events: Y.YEvent<Y.AbstractType<any>>[]) => {
+    const syncIncremental = (events: Y.YEvent<Y.AbstractType<any>>[], transaction: Y.Transaction) => {
+      if (transaction.local && transaction.origin === "group-drag-move") return;
       for (const event of events) {
         const keyPath = event.path?.[0];
         if (typeof keyPath === "string") {

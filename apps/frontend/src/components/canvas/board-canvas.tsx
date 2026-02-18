@@ -35,6 +35,8 @@ type BoardCanvasProps = {
   onDragElementMove?: (id: string, x: number, y: number) => void;
   onDragElement?: (id: string, x: number, y: number) => void;
   onDragSelectedElements?: (deltaX: number, deltaY: number) => void;
+  onGroupDragStart?: () => void;
+  onGroupDragMove?: (dx: number, dy: number) => void;
   onResizeElement?: (id: string, box: ElementBox) => void;
   onRotateElement?: (id: string, rotation: number) => void;
   onRotateCursorChange?: (state: RotationCursorState) => void;
@@ -69,6 +71,8 @@ export function BoardCanvas({
   onDragElementMove,
   onDragElement,
   onDragSelectedElements,
+  onGroupDragStart,
+  onGroupDragMove,
   onResizeElement,
   onRotateElement,
   onRotateCursorChange,
@@ -228,6 +232,10 @@ export function BoardCanvas({
   onDragElementRef.current = onDragElement;
   const onDragSelectedElementsRef = useRef(onDragSelectedElements);
   onDragSelectedElementsRef.current = onDragSelectedElements;
+  const onGroupDragStartRef = useRef(onGroupDragStart);
+  onGroupDragStartRef.current = onGroupDragStart;
+  const onGroupDragMoveRef = useRef(onGroupDragMove);
+  onGroupDragMoveRef.current = onGroupDragMove;
   const onResizeElementRef = useRef(onResizeElement);
   onResizeElementRef.current = onResizeElement;
   const onRotateElementRef = useRef(onRotateElement);
@@ -258,6 +266,14 @@ export function BoardCanvas({
       onDragElementRef.current?.(draggedId, newX, newY);
     }
   }, [setDropTargetFrameId]);
+
+  const handleGroupDragStart = useCallback(() => {
+    onGroupDragStartRef.current?.();
+  }, []);
+
+  const handleGroupDragMove = useCallback((dx: number, dy: number) => {
+    onGroupDragMoveRef.current?.(dx, dy);
+  }, []);
 
   const handleResize = useCallback((id: string, box: ElementBox) => {
     onResizeElementRef.current?.(id, box);
@@ -381,6 +397,8 @@ export function BoardCanvas({
                   onDragStart={onDragElementStart}
                   onDragMove={onDragElementMove}
                   onDragEnd={handleMultiDragEnd}
+                  onGroupDragStart={handleGroupDragStart}
+                  onGroupDragMove={handleGroupDragMove}
                   resizable={resizable}
                   onResize={resizable ? handleResize : undefined}
                   onRotate={resizable ? handleRotate : undefined}

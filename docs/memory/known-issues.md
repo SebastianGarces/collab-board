@@ -79,3 +79,12 @@ Check here before investigating a problem -- it may already be documented.
 **Cause:** Cursor's sandbox intercepts filesystem operations outside the workspace, redirecting Playwright's browser cache (`~/Library/Caches/ms-playwright/`) to a temporary `cursor-sandbox-cache` directory. This causes two problems: (1) install and test may resolve to different temp paths, so browsers are never found, and (2) the sandbox confuses Playwright's architecture detection, downloading x64 binaries on arm64 Macs, which crash with SIGSEGV.
 **Workaround:** Fixed by setting `PLAYWRIGHT_BROWSERS_PATH=.playwright-browsers` in the `test:perf:e2e` and `test:perf:e2e:ci` scripts in `apps/frontend/package.json`, storing browsers inside the workspace where the sandbox allows normal access. When running via Cursor agent, use `required_permissions: ["all"]` to avoid the sandbox re-downloading wrong-arch binaries. Running from a real terminal works with no special flags.
 **Status:** resolved
+
+---
+
+### canvasLongFramesPerMinute exceeds soft budget
+**Date found:** 2026-02-18
+**Symptom:** Frontend perf test reports a soft budget warning: `canvasLongFramesPerMinute: 233.8 > 120`. The hard budget is not breached and the test passes, but the metric is nearly 2x the soft target.
+**Cause:** Not yet investigated. Likely caused by heavy per-frame work during the 5-user concurrent stress test (Yjs observation RAF flushes, Konva re-renders, or React reconciliation under high object/cursor update rates).
+**Workaround:** None needed immediately -- the test passes. Worth profiling to identify the hot path before adding more real-time features that increase per-frame work.
+**Status:** open

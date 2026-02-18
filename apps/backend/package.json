@@ -13,6 +13,7 @@
     "seed:public-board": "bun --env-file=../../.env src/boards/seed-public-board.ts",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
+    "db:studio": "drizzle-kit studio",
     "migrate": "bun run db:generate && bun run db:migrate"
   },
   "dependencies": {
