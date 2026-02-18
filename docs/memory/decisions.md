@@ -102,3 +102,12 @@ Append-only log. Never edit past entries. If a decision is superseded, add a new
 **Context:** Connectors need to link two shapes and follow them when moved. Unlike other elements that are fully positioned by x/y/width/height, connectors derive their visual path from endpoint positions which may be anchored to other elements.
 **Decision:** Store `fromId/toId` (attached element IDs) and `fromX/fromY/toX/toY` (absolute coordinates) on the connector. At render time, `resolveEndpoints()` recomputes anchor positions from connected shapes' bounding boxes. Path routing (straight/curved/orthogonal) is computed per-render via `computePath()`. The connector's `x/y/width/height` is the bounding box of the two endpoints, used only for selection hit testing and toolbar positioning. Connectors use `InteractiveShape` with `resizable={false}`, `draggable={false}`, and custom endpoint/midpoint handle components.
 **Consequences:** Connectors reactively follow connected shapes without explicit update logic. Endpoint snapping uses `findSnapTarget()` at drag-end to attach to nearby shapes. Selection toolbar has 3 states (default, has-label, editing-label) managed via `editingConnectorLabel` boolean in page component.
+
+---
+
+### ADR-011: Frontend canvas updates must be throttled and selector-driven
+**Date:** 2026-02-17
+**Status:** accepted
+**Context:** Heavy boards (dozens of frames and hundreds of objects) caused interaction regressions: low FPS, slow selection toolbar/dropdowns, and lag during resize/drag operations due to broad rerenders and per-event Yjs writes.
+**Decision:** Adopt a performance baseline that (1) keeps transient pointer state out of top-level React state, (2) batches high-frequency drag/resize/rotate writes to Yjs on `requestAnimationFrame`, (3) relies on narrow Zustand selectors with `useShallow` when grouping values, and (4) culls offscreen canvas elements while keeping selected elements rendered.
+**Consequences:** Canvas interaction remains responsive under higher object counts, overlay controls become less sensitive to pointer churn, and perf budgets now include `inputToRenderMs` and long-frame enforcement to catch regressions in CI.

@@ -22,6 +22,8 @@ import type { ElementBox } from "./shape-transform";
 
 import type { RotationCursorState } from "./interactive-shape";
 
+const VIEWPORT_CULL_MARGIN = 300;
+
 type BoardCanvasProps = {
   camera: { x: number; y: number; scale: number };
   syntheticObjectCount?: number;
@@ -113,6 +115,17 @@ export function BoardCanvas({
     () => elements.filter((e) => e.type === "frame") as FrameElement[],
     [elements]
   );
+  const elementsById = useMemo(() => new Map(elements.map((el) => [el.id, el])), [elements]);
+  const frameChildIdsByFrame = useMemo(() => {
+    const map = new Map<string, string[]>();
+    for (const frame of frameElements) {
+      map.set(
+        frame.id,
+        getFrameChildIdsFn ? getFrameChildIdsFn(frame.id) : getFrameChildIds(frame.id, elements)
+      );
+    }
+    return map;
+  }, [elements, frameElements, getFrameChildIdsFn]);
 
   const groupBounds = useMemo(() => {
     if (!isMultiSelect) return null;
@@ -159,14 +172,42 @@ export function BoardCanvas({
     const hiddenIds = new Set<string>();
     for (const f of frames) {
       if ((f as FrameElement).hidden) {
-        const children = getFrameChildIdsFn ? getFrameChildIdsFn(f.id) : getFrameChildIds(f.id, elements);
+        const children = frameChildIdsByFrame.get(f.id) ?? [];
         for (const id of children) hiddenIds.add(id);
       }
     }
 
     const visibleNonFrames = nonFrames.filter((el) => !hiddenIds.has(el.id));
     return [...frames, ...visibleNonFrames, ...connectors];
-  }, [elements, getFrameChildIdsFn]);
+  }, [elements, frameChildIdsByFrame]);
+
+  const viewportBounds = useMemo(() => {
+    if (camera.scale <= 0) {
+      return { minX: -Infinity, minY: -Infinity, maxX: Infinity, maxY: Infinity };
+    }
+    return {
+      minX: (-camera.x) / camera.scale - VIEWPORT_CULL_MARGIN,
+      minY: (-camera.y) / camera.scale - VIEWPORT_CULL_MARGIN,
+      maxX: (size.width - camera.x) / camera.scale + VIEWPORT_CULL_MARGIN,
+      maxY: (size.height - camera.y) / camera.scale + VIEWPORT_CULL_MARGIN,
+    };
+  }, [camera.scale, camera.x, camera.y, size.width, size.height]);
+
+  const visibleElements = useMemo(() => {
+    return sortedElements.filter((el) => {
+      if (selectedElementIds.has(el.id)) return true;
+      const minX = el.x;
+      const minY = el.y;
+      const maxX = el.x + el.width;
+      const maxY = el.y + el.height;
+      return (
+        maxX >= viewportBounds.minX &&
+        minX <= viewportBounds.maxX &&
+        maxY >= viewportBounds.minY &&
+        minY <= viewportBounds.maxY
+      );
+    });
+  }, [sortedElements, selectedElementIds, viewportBounds]);
 
   const isPointerMode = activeTool === "pointer";
   const draggable = isPointerMode;
@@ -177,7 +218,7 @@ export function BoardCanvas({
 
   const handleMultiDragEnd = (draggedId: string, newX: number, newY: number) => {
     setDropTargetFrameId(null);
-    const el = elements.find((e) => e.id === draggedId);
+    const el = elementsById.get(draggedId);
     if (!el) return;
     const deltaX = newX - el.x;
     const deltaY = newY - el.y;
@@ -259,7 +300,7 @@ export function BoardCanvas({
             })}
 
             {/* Real board elements (frames first, then connectors, then non-frames; hidden children filtered out) */}
-            {sortedElements.map((el) => {
+            {visibleElements.map((el) => {
               const isLine = el.type === "line";
               const isConnector = el.type === "connector";
               const isFrame = el.type === "frame";
@@ -286,7 +327,7 @@ export function BoardCanvas({
                   hideSelectionOutline={isLine || isConnector}
                   getDragChildIds={
                     el.type === "frame"
-                      ? () => (getFrameChildIdsFn ? getFrameChildIdsFn(el.id) : getFrameChildIds(el.id, elements))
+                      ? () => frameChildIdsByFrame.get(el.id) ?? []
                       : undefined
                   }
                   onDragPositionUpdate={

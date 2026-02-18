@@ -1,5 +1,6 @@
 "use client";
 
+import { memo, useCallback, useState } from "react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 
 type ColorPickerProps = {
@@ -10,9 +11,31 @@ type ColorPickerProps = {
   onOpenChange?: (open: boolean) => void;
 };
 
-export function ColorPicker({ value, onChange, colors, open, onOpenChange }: ColorPickerProps) {
+function ColorPickerComponent({ value, onChange, colors, open, onOpenChange }: ColorPickerProps) {
+  const [internalOpen, setInternalOpen] = useState(false);
+  const isControlled = open !== undefined;
+  const isOpen = isControlled ? open : internalOpen;
+
+  const setOpen = useCallback(
+    (nextOpen: boolean) => {
+      if (!isControlled) {
+        setInternalOpen(nextOpen);
+      }
+      onOpenChange?.(nextOpen);
+    },
+    [isControlled, onOpenChange]
+  );
+
+  const handleColorSelect = useCallback(
+    (color: string) => {
+      onChange(color);
+      setOpen(false);
+    },
+    [onChange, setOpen]
+  );
+
   return (
-    <Popover open={open} onOpenChange={onOpenChange}>
+    <Popover open={isOpen} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <button
           type="button"
@@ -31,7 +54,7 @@ export function ColorPicker({ value, onChange, colors, open, onOpenChange }: Col
             <button
               key={color}
               type="button"
-              onClick={() => onChange(color)}
+              onClick={() => handleColorSelect(color)}
               className="h-7 w-7 rounded-full border-2 transition-colors shrink-0"
               style={{
                 backgroundColor: color,
@@ -46,3 +69,5 @@ export function ColorPicker({ value, onChange, colors, open, onOpenChange }: Col
     </Popover>
   );
 }
+
+export const ColorPicker = memo(ColorPickerComponent);

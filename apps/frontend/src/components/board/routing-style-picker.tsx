@@ -1,5 +1,6 @@
 "use client";
 
+import { memo, useMemo } from "react";
 import { Check } from "lucide-react";
 
 import type { ConnectorRoutingStyle } from "@collab/shared/collab";
@@ -27,7 +28,13 @@ function getLabelForStyle(value: ConnectorRoutingStyle): string {
   return ROUTING_OPTIONS.find((o) => o.value === value)?.label ?? "Straight";
 }
 
-export function RoutingStylePicker({ value, onChange, open, onOpenChange }: RoutingStylePickerProps) {
+function RoutingStylePickerComponent({ value, onChange, open, onOpenChange }: RoutingStylePickerProps) {
+  const selectedLabel = useMemo(() => getLabelForStyle(value), [value]);
+  const selectedIcon = useMemo(
+    () => ROUTING_OPTIONS.find((option) => option.value === value)?.icon ?? "╱",
+    [value]
+  );
+  const shouldRenderContent = open === undefined || open;
   return (
     <DropdownMenu open={open} onOpenChange={onOpenChange} modal={false}>
       <DropdownMenuTrigger asChild>
@@ -37,32 +44,36 @@ export function RoutingStylePicker({ value, onChange, open, onOpenChange }: Rout
           title="Line routing"
         >
           <span className="text-sm font-mono">
-            {ROUTING_OPTIONS.find((o) => o.value === value)?.icon ?? "╱"}
+            {selectedIcon}
           </span>
           <span className="text-xs text-[#999] hidden sm:inline">
-            {getLabelForStyle(value)}
+            {selectedLabel}
           </span>
         </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent
-        side="top"
-        sideOffset={8}
-        className="bg-[#1a1a1a] border-[#2a2a2a] min-w-[140px]"
-      >
-        {ROUTING_OPTIONS.map((option) => (
-          <DropdownMenuItem
-            key={option.value}
-            onClick={() => onChange(option.value)}
-            className="flex items-center gap-2 cursor-pointer"
-          >
-            <span className="w-4 shrink-0">
-              {option.value === value && <Check className="h-3.5 w-3.5" />}
-            </span>
-            <span className="font-mono mr-1">{option.icon}</span>
-            <span>{option.label}</span>
-          </DropdownMenuItem>
-        ))}
-      </DropdownMenuContent>
+      {shouldRenderContent ? (
+        <DropdownMenuContent
+          side="top"
+          sideOffset={8}
+          className="bg-[#1a1a1a] border-[#2a2a2a] min-w-[140px]"
+        >
+          {ROUTING_OPTIONS.map((option) => (
+            <DropdownMenuItem
+              key={option.value}
+              onClick={() => onChange(option.value)}
+              className="flex items-center gap-2 cursor-pointer"
+            >
+              <span className="w-4 shrink-0">
+                {option.value === value && <Check className="h-3.5 w-3.5" />}
+              </span>
+              <span className="font-mono mr-1">{option.icon}</span>
+              <span>{option.label}</span>
+            </DropdownMenuItem>
+          ))}
+        </DropdownMenuContent>
+      ) : null}
     </DropdownMenu>
   );
 }
+
+export const RoutingStylePicker = memo(RoutingStylePickerComponent);

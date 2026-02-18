@@ -30,6 +30,10 @@
     },
     "canvasLongFramesPerMinute": {
       "max": 120
+    },
+    "inputToRenderMs": {
+      "p95Max": 16.7,
+      "p99Max": 33.4
     }
   }
 }

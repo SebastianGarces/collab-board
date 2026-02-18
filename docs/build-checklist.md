@@ -110,11 +110,13 @@ Layer 4 (final — depends on everything above)
 
 | # | Metric | Target | Status | Notes |
 |---|--------|--------|--------|-------|
-| 1 | Frame rate during pan/zoom | 60 FPS | [x] Infra done | FPS monitoring in perf-probe, budget in perf checks |
-| 2 | Object sync latency | <100ms | [x] Infra done | WS benchmark measures p50/p95/p99 |
+| 1 | Frame rate during pan/zoom | 60 FPS | [x] Infra done | FPS monitoring in perf-probe, budget in perf checks, and viewport culling for non-selected offscreen elements |
+| 2 | Object sync latency | <100ms | [x] Infra done | WS benchmark measures p50/p95/p99; high-frequency drag/resize/rotate writes are RAF-batched on frontend |
 | 3 | Cursor sync latency | <50ms | [x] Infra done | Perf probe round-trip measurement |
 | 4 | Object capacity (500+ objects) | 500+ | [x] Infra done | WS benchmark creates 500 objects |
 | 5 | Concurrent users | 5+ | [x] Infra done | 5 seeded perf users, Playwright multi-session test |
+| 6 | Input to render latency | p95 <= 16.7ms | [x] Infra done | `inputToRenderMs` now enforced in frontend perf budget checks |
+| 7 | Long frame budget | <=120/min | [x] Infra done | `canvasLongFramesPerMinute` now enforced in `perf-check.ts` and frontend perf spec |
 
 ---
 

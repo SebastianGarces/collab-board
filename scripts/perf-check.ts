@@ -8,6 +8,8 @@ type Budgets = {
     canvasFps: { avgMin: number };
     objectCapacity: { min: number };
     concurrentUsers: { min: number };
+    canvasLongFramesPerMinute: { max: number };
+    inputToRenderMs: { p95Max: number };
   };
 };
 
@@ -20,6 +22,8 @@ type BackendSummary = {
 
 type FrontendSummary = {
   canvasFps: { avg: number };
+  canvasLongFramesPerMinute: number;
+  inputToRenderMs: { p95: number };
   probeLatencyMs: {
     cursor: {
       p95: number;
@@ -68,6 +72,16 @@ async function main() {
   if (frontend.probeLatencyMs.cursor.p95 > budgets.thresholds.cursorSyncLatencyMs.p95Max) {
     failures.push(
       `frontend cursor p95 ${frontend.probeLatencyMs.cursor.p95.toFixed(2)}ms > ${budgets.thresholds.cursorSyncLatencyMs.p95Max}ms`
+    );
+  }
+  if (frontend.canvasLongFramesPerMinute > budgets.thresholds.canvasLongFramesPerMinute.max) {
+    failures.push(
+      `frontend long frames/min ${frontend.canvasLongFramesPerMinute.toFixed(2)} > ${budgets.thresholds.canvasLongFramesPerMinute.max}`
+    );
+  }
+  if (frontend.inputToRenderMs.p95 > budgets.thresholds.inputToRenderMs.p95Max) {
+    failures.push(
+      `frontend input->render p95 ${frontend.inputToRenderMs.p95.toFixed(2)}ms > ${budgets.thresholds.inputToRenderMs.p95Max}ms`
     );
   }
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type * as Y from "yjs";
 
 import { MIN_ELEMENT_SIZE } from "@/components/canvas/shape-transform";
@@ -225,30 +225,102 @@ function yMapToElement(id: string, map: Y.Map<unknown>): BoardElement | null {
 
 export function useYjsElements(doc: Y.Doc | null): BoardElement[] {
   const [elements, setElements] = useState<BoardElement[]>([]);
+  const orderRef = useRef<string[]>([]);
 
   useEffect(() => {
     if (!doc) {
       setElements([]);
+      orderRef.current = [];
       return;
     }
 
     const elementsMap = doc.getMap("elements");
 
-    const sync = () => {
+    const buildOrder = () => {
+      const order: string[] = [];
+      elementsMap.forEach((_value, key) => {
+        order.push(key);
+      });
+      return order;
+    };
+
+    const syncAll = () => {
+      const order = buildOrder();
       const next: BoardElement[] = [];
-      elementsMap.forEach((value, key) => {
+      for (const key of order) {
+        const value = elementsMap.get(key);
         if (value && typeof (value as Y.Map<unknown>).get === "function") {
           const el = yMapToElement(key, value as Y.Map<unknown>);
           if (el) next.push(el);
         }
-      });
+      }
+      orderRef.current = order;
       setElements(next);
     };
 
-    sync();
-    elementsMap.observeDeep(sync);
+    const syncIncremental = (events: Y.YEvent<unknown>[]) => {
+      const changedIds = new Set<string>();
+      let orderMayHaveChanged = false;
+
+      for (const event of events) {
+        const keyPath = event.path?.[0];
+        if (typeof keyPath === "string") {
+          changedIds.add(keyPath);
+        }
+
+        if (event.target === elementsMap) {
+          orderMayHaveChanged = true;
+          if ("keysChanged" in event && event.keysChanged instanceof Set) {
+            for (const key of event.keysChanged) {
+              if (typeof key === "string") {
+                changedIds.add(key);
+              }
+            }
+          }
+        }
+      }
+
+      if (changedIds.size === 0 && !orderMayHaveChanged) {
+        return;
+      }
+
+      const nextOrder = orderMayHaveChanged ? buildOrder() : orderRef.current;
+      if (nextOrder.length === 0) {
+        orderRef.current = nextOrder;
+        setElements([]);
+        return;
+      }
+
+      setElements((prev) => {
+        const byId = new Map(prev.map((element) => [element.id, element]));
+
+        for (const id of changedIds) {
+          const value = elementsMap.get(id);
+          if (!value || typeof (value as Y.Map<unknown>).get !== "function") {
+            byId.delete(id);
+            continue;
+          }
+
+          const nextElement = yMapToElement(id, value as Y.Map<unknown>);
+          if (nextElement) {
+            byId.set(id, nextElement);
+          } else {
+            byId.delete(id);
+          }
+        }
+
+        const nextElements = nextOrder
+          .map((id) => byId.get(id))
+          .filter((value): value is BoardElement => !!value);
+        orderRef.current = nextOrder;
+        return nextElements;
+      });
+    };
+
+    syncAll();
+    elementsMap.observeDeep(syncIncremental);
     return () => {
-      elementsMap.unobserveDeep(sync);
+      elementsMap.unobserveDeep(syncIncremental);
     };
   }, [doc]);
 

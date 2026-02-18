@@ -112,9 +112,16 @@ export default function CanvasPage() {
   const [marqueeRect, setMarqueeRect] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
   const marqueeStartRef = useRef<{ x: number; y: number } | null>(null);
   const [rotationCursor, setRotationCursor] = useState<{ corner: "nw" | "ne" | "se" | "sw"; elementRotation: number } | null>(null);
-  const [pointerPosition, setPointerPosition] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const pointerPositionRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
   const [connectorSnapAnchors, setConnectorSnapAnchors] = useState<Point[]>([]);
   const [connectorSnapTarget, setConnectorSnapTarget] = useState<Point | null>(null);
+  const pendingDragMoveRef = useRef<{ id: string; x: number; y: number } | null>(null);
+  const pendingResizeRef = useRef<{ id: string; box: ElementBox } | null>(null);
+  const pendingRotateRef = useRef<{ id: string; rotation: number } | null>(null);
+  const dragMoveRafRef = useRef<number | null>(null);
+  const resizeRafRef = useRef<number | null>(null);
+  const rotateRafRef = useRef<number | null>(null);
+  const perfElementIdRef = useRef<string | null>(null);
 
   const perfEnabled =
     process.env.NEXT_PUBLIC_ENABLE_PERF_PROBES === "1" ||
@@ -220,6 +227,7 @@ export default function CanvasPage() {
       sendCursorProbe: (count?: number) => Promise<void>;
       setSyntheticObjectCount: (count: number) => void;
       runPanZoomScript: (durationMs?: number) => Promise<void>;
+      runInteractionScript: (steps?: number) => Promise<void>;
     };
 
     const api: PerfTestApi = {
@@ -251,7 +259,48 @@ export default function CanvasPage() {
             window.setTimeout(resolve, 16);
           });
         }
-      }
+      },
+      runInteractionScript: async (steps = 180) => {
+        const doc = docRef.current;
+        if (!doc) return;
+        const elementsMap = doc.getMap("elements");
+
+        let elementId = perfElementIdRef.current;
+        let elementMap =
+          elementId ? (elementsMap.get(elementId) as Y.Map<unknown> | undefined) : undefined;
+
+        if (!elementMap) {
+          elementId = generateId();
+          const newElementMap = new Y.Map<unknown>();
+          newElementMap.set("type", "rectangle");
+          newElementMap.set("id", elementId);
+          newElementMap.set("x", 140);
+          newElementMap.set("y", 120);
+          newElementMap.set("width", 180);
+          newElementMap.set("height", 120);
+          newElementMap.set("fill", "#3b82f6");
+          newElementMap.set("stroke", "#2c61b8");
+          elementsMap.set(elementId, newElementMap);
+          perfElementIdRef.current = elementId;
+          elementMap = newElementMap;
+        }
+        if (!elementId || !elementMap) return;
+
+        const resolvedElementId = elementId;
+        for (let index = 0; index < steps; index++) {
+          perfCollectorRef.current.markInput();
+          setSelectedElementIds(new Set([resolvedElementId]));
+          const nextW = 140 + (index % 15) * 8;
+          const nextH = 90 + (index % 12) * 7;
+          doc.transact(() => {
+            elementMap!.set("width", nextW);
+            elementMap!.set("height", nextH);
+          });
+          await new Promise<void>((resolve) => {
+            window.setTimeout(resolve, 16);
+          });
+        }
+      },
     };
 
     (window as unknown as { __collabPerf?: PerfTestApi }).__collabPerf = api;
@@ -732,29 +781,100 @@ export default function CanvasPage() {
     });
   }, []);
 
-  const resizeElement = useCallback((id: string, box: ElementBox) => {
+  const flushPendingDragMove = useCallback(() => {
     const doc = docRef.current;
     if (!doc) return;
     const elementsMap = doc.getMap("elements");
-    const elementMap = elementsMap.get(id) as Y.Map<unknown> | undefined;
+    const pending = pendingDragMoveRef.current;
+    if (!pending) return;
+    pendingDragMoveRef.current = null;
+    const elementMap = elementsMap.get(pending.id) as Y.Map<unknown> | undefined;
     if (!elementMap) return;
     doc.transact(() => {
-      elementMap.set("x", box.x);
-      elementMap.set("y", box.y);
-      elementMap.set("width", box.width);
-      elementMap.set("height", box.height);
+      elementMap.set("x", pending.x);
+      elementMap.set("y", pending.y);
     });
   }, []);
 
-  const rotateElement = useCallback((id: string, rotation: number) => {
+  const onDragElementMove = useCallback(
+    (id: string, x: number, y: number) => {
+      pendingDragMoveRef.current = { id, x, y };
+      if (dragMoveRafRef.current !== null) return;
+      dragMoveRafRef.current = window.requestAnimationFrame(() => {
+        dragMoveRafRef.current = null;
+        flushPendingDragMove();
+      });
+    },
+    [flushPendingDragMove]
+  );
+
+  const flushPendingResize = useCallback(() => {
     const doc = docRef.current;
     if (!doc) return;
     const elementsMap = doc.getMap("elements");
-    const elementMap = elementsMap.get(id) as Y.Map<unknown> | undefined;
+    const pending = pendingResizeRef.current;
+    if (!pending) return;
+    pendingResizeRef.current = null;
+    const elementMap = elementsMap.get(pending.id) as Y.Map<unknown> | undefined;
     if (!elementMap) return;
     doc.transact(() => {
-      elementMap.set("rotation", rotation);
+      elementMap.set("x", pending.box.x);
+      elementMap.set("y", pending.box.y);
+      elementMap.set("width", pending.box.width);
+      elementMap.set("height", pending.box.height);
     });
+  }, []);
+
+  const resizeElement = useCallback(
+    (id: string, box: ElementBox) => {
+      pendingResizeRef.current = { id, box };
+      if (resizeRafRef.current !== null) return;
+      resizeRafRef.current = window.requestAnimationFrame(() => {
+        resizeRafRef.current = null;
+        flushPendingResize();
+      });
+    },
+    [flushPendingResize]
+  );
+
+  const flushPendingRotate = useCallback(() => {
+    const doc = docRef.current;
+    if (!doc) return;
+    const elementsMap = doc.getMap("elements");
+    const pending = pendingRotateRef.current;
+    if (!pending) return;
+    pendingRotateRef.current = null;
+    const elementMap = elementsMap.get(pending.id) as Y.Map<unknown> | undefined;
+    if (!elementMap) return;
+    doc.transact(() => {
+      elementMap.set("rotation", pending.rotation);
+    });
+  }, []);
+
+  const rotateElement = useCallback(
+    (id: string, rotation: number) => {
+      pendingRotateRef.current = { id, rotation };
+      if (rotateRafRef.current !== null) return;
+      rotateRafRef.current = window.requestAnimationFrame(() => {
+        rotateRafRef.current = null;
+        flushPendingRotate();
+      });
+    },
+    [flushPendingRotate]
+  );
+
+  useEffect(() => {
+    return () => {
+      if (dragMoveRafRef.current !== null) {
+        window.cancelAnimationFrame(dragMoveRafRef.current);
+      }
+      if (resizeRafRef.current !== null) {
+        window.cancelAnimationFrame(resizeRafRef.current);
+      }
+      if (rotateRafRef.current !== null) {
+        window.cancelAnimationFrame(rotateRafRef.current);
+      }
+    };
   }, []);
 
   const moveLineEndpoint = useCallback(
@@ -1224,9 +1344,7 @@ export default function CanvasPage() {
     };
   }, [editingElementId]);
 
-  if (isPending || !session?.user || !currentUser) {
-    return <main className="min-h-screen grid place-content-center">Loading session...</main>;
-  }
+  const isSessionReady = !isPending && !!session?.user && !!currentUser;
 
   const isPointerMode = activeTool === "pointer";
 
@@ -1449,8 +1567,8 @@ export default function CanvasPage() {
   };
 
   const onSectionPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
-    // Track pointer position for custom cursor
-    setPointerPosition({ x: event.clientX, y: event.clientY });
+    // Keep this in a ref so pointer movement does not re-render the full page.
+    pointerPositionRef.current = { x: event.clientX, y: event.clientY };
     
     if (perfEnabled) {
       perfCollectorRef.current.markInput();
@@ -1498,14 +1616,20 @@ export default function CanvasPage() {
   };
 
   // Compute editing element position for text overlay
-  const singleSelectedId = selectedElementIds.size === 1 ? [...selectedElementIds][0] : null;
-  const selectedElement = singleSelectedId
-    ? elements.find((e) => e.id === singleSelectedId) ?? null
-    : null;
+  const singleSelectedId = useMemo(
+    () => (selectedElementIds.size === 1 ? [...selectedElementIds][0] : null),
+    [selectedElementIds]
+  );
 
-  const editingElement = editingElementId
-    ? elements.find((e) => e.id === editingElementId)
-    : null;
+  const selectedElement = useMemo(() => {
+    if (!singleSelectedId) return null;
+    return elements.find((e) => e.id === singleSelectedId) ?? null;
+  }, [singleSelectedId, elements]);
+
+  const editingElement = useMemo(() => {
+    if (!editingElementId) return null;
+    return elements.find((e) => e.id === editingElementId) ?? null;
+  }, [editingElementId, elements]);
 
   // Compute connector label midpoint for overlay
   const connectorLabelMidpoint = editingElement?.type === "connector" && editingConnectorLabel
@@ -1541,6 +1665,34 @@ export default function CanvasPage() {
             transformOrigin: "top left" as const,
           }
     : null;
+
+  const handleSelectedElementPropertyChange = useCallback(
+    (key: string, value: unknown) => {
+      if (!selectedElement) return;
+      updateElementProperty(selectedElement.id, key, value);
+    },
+    [selectedElement, updateElementProperty]
+  );
+
+  const handleStartEditingConnectorLabel = useCallback(() => {
+    if (!selectedElement || selectedElement.type !== "connector") return;
+    updateElementProperty(selectedElement.id, "labelText", " ");
+    setEditingConnectorLabel(true);
+    setEditingElementId(selectedElement.id);
+    setEditText("");
+  }, [selectedElement, updateElementProperty]);
+
+  const handleToolChange = useCallback((tool: ActiveTool) => {
+    setActiveTool(tool);
+    if (tool !== "connector") {
+      setConnectorSnapAnchors([]);
+      setConnectorSnapTarget(null);
+    }
+  }, []);
+
+  if (!isSessionReady) {
+    return <main className="min-h-screen grid place-content-center">Loading session...</main>;
+  }
 
   return (
     <main className="min-h-screen grid grid-rows-[auto_1fr_auto]">
@@ -1613,17 +1765,7 @@ export default function CanvasPage() {
           getFrameChildIdsFn={getFrameChildIdsFromYjs}
           onSelectElement={selectElement}
           onDragElementStart={() => setIsDraggingElement(true)}
-          onDragElementMove={(id, x, y) => {
-            const doc = docRef.current;
-            if (!doc) return;
-            const elementsMap = doc.getMap("elements");
-            const elementMap = elementsMap.get(id) as Y.Map<unknown> | undefined;
-            if (!elementMap) return;
-            doc.transact(() => {
-              elementMap.set("x", x);
-              elementMap.set("y", y);
-            });
-          }}
+          onDragElementMove={onDragElementMove}
           onDragElement={(...args) => { setIsDraggingElement(false); moveElement(...args); }}
           onDragSelectedElements={(...args) => { setIsDraggingElement(false); moveSelectedElements(...args); }}
           onResizeElement={resizeElement}
@@ -1728,18 +1870,11 @@ export default function CanvasPage() {
         {selectedElement && (!editingElementId || editingConnectorLabel) && !isDraggingElement && (
           <SelectionToolbar
             element={selectedElement}
-            onPropertyChange={(key, value) => updateElementProperty(selectedElement.id, key, value)}
+            onPropertyChange={handleSelectedElementPropertyChange}
             camera={camera}
             editingConnectorLabel={editingConnectorLabel}
             onStartEditingConnectorLabel={
-              selectedElement.type === "connector"
-                ? () => {
-                    updateElementProperty(selectedElement.id, "labelText", " ");
-                    setEditingConnectorLabel(true);
-                    setEditingElementId(selectedElement.id);
-                    setEditText("");
-                  }
-                : undefined
+              selectedElement.type === "connector" ? handleStartEditingConnectorLabel : undefined
             }
           />
         )}
@@ -1847,13 +1982,7 @@ export default function CanvasPage() {
         {/* Toolbar */}
         <Toolbar
           activeTool={activeTool}
-          onToolChange={(tool) => {
-            setActiveTool(tool);
-            if (tool !== "connector") {
-              setConnectorSnapAnchors([]);
-              setConnectorSnapTarget(null);
-            }
-          }}
+          onToolChange={handleToolChange}
           onDelete={deleteSelectedElements}
           onDuplicate={duplicateSelectedElements}
           hasSelection={selectedElementIds.size > 0}
@@ -1862,8 +1991,7 @@ export default function CanvasPage() {
         {/* Custom rotation cursor */}
         {rotationCursor && (
           <RotationCursor
-            x={pointerPosition.x}
-            y={pointerPosition.y}
+            pointerRef={pointerPositionRef}
             corner={rotationCursor.corner}
             elementRotation={rotationCursor.elementRotation}
           />

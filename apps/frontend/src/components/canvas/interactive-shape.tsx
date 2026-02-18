@@ -1,7 +1,8 @@
 "use client";
 
-import { type ReactNode, useRef, useState } from "react";
+import { memo, type ReactNode, useRef, useState } from "react";
 import { Group, Rect } from "react-konva";
+import { useShallow } from "zustand/react/shallow";
 
 import { useCanvasStore } from "@/stores/canvas-store";
 import type { BaseElement } from "@collab/shared/collab";
@@ -42,7 +43,7 @@ type InteractiveShapeProps = {
   children: ReactNode;
 };
 
-export function InteractiveShape({
+function InteractiveShapeComponent({
   element,
   isSelected,
   multiSelected,
@@ -68,23 +69,20 @@ export function InteractiveShape({
   const [isRotating, setIsRotating] = useState(false);
   const rotationCornerRef = useRef<RotationCorner | null>(null);
 
-  const startGroupDrag = useCanvasStore((s) => s.startGroupDrag);
-  const updateGroupDrag = useCanvasStore((s) => s.updateGroupDrag);
-  const endGroupDrag = useCanvasStore((s) => s.endGroupDrag);
-
-  const groupDragDx = useCanvasStore((s) =>
-    s.groupDrag &&
-    s.groupDrag.draggedId !== element.id &&
-    (s.selectedElementIds.has(element.id) || s.groupDrag.childIds.has(element.id))
-      ? s.groupDrag.dx
-      : 0
-  );
-  const groupDragDy = useCanvasStore((s) =>
-    s.groupDrag &&
-    s.groupDrag.draggedId !== element.id &&
-    (s.selectedElementIds.has(element.id) || s.groupDrag.childIds.has(element.id))
-      ? s.groupDrag.dy
-      : 0
+  const { startGroupDrag, updateGroupDrag, endGroupDrag, groupDragDx, groupDragDy } = useCanvasStore(
+    useShallow((s) => {
+      const isDrivenByGroupDrag =
+        !!s.groupDrag &&
+        s.groupDrag.draggedId !== element.id &&
+        (s.selectedElementIds.has(element.id) || s.groupDrag.childIds.has(element.id));
+      return {
+        startGroupDrag: s.startGroupDrag,
+        updateGroupDrag: s.updateGroupDrag,
+        endGroupDrag: s.endGroupDrag,
+        groupDragDx: isDrivenByGroupDrag ? s.groupDrag!.dx : 0,
+        groupDragDy: isDrivenByGroupDrag ? s.groupDrag!.dy : 0,
+      };
+    })
   );
 
   const effectiveDraggable = draggable && !isResizing && !isRotating;
@@ -275,3 +273,5 @@ export function InteractiveShape({
     </Group>
   );
 }
+
+export const InteractiveShape = memo(InteractiveShapeComponent);

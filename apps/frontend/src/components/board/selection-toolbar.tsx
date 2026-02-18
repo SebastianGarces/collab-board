@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { memo, useMemo } from "react";
 import { Eye, EyeClosed, Type } from "lucide-react";
 import type { BoardElement, ConnectorElement, ElementType, FrameElement } from "@collab/shared/collab";
 import { STICKY_NOTE_COLORS, SHAPE_COLORS, FRAME_COLORS, FRAME_BORDER_COLORS } from "@collab/shared/collab";
@@ -65,25 +65,30 @@ type SelectionToolbarProps = {
   onStartEditingConnectorLabel?: () => void;
 };
 
-type ActiveMenu = "color" | "fontFamily" | "fontSize" | "borderStyle" | "routing" | "arrows" | "dashStyle" | null;
-
-export function SelectionToolbar({ element, onPropertyChange, camera, editingConnectorLabel, onStartEditingConnectorLabel }: SelectionToolbarProps) {
-  const [activeMenu, setActiveMenu] = useState<ActiveMenu>(null);
-
-  const caps = ELEMENT_CAPABILITIES[element.type];
+function SelectionToolbarComponent({
+  element,
+  onPropertyChange,
+  camera,
+  editingConnectorLabel,
+  onStartEditingConnectorLabel,
+}: SelectionToolbarProps) {
+  const caps = useMemo(() => ELEMENT_CAPABILITIES[element.type], [element.type]);
 
   // Compute the visual bounding box accounting for rotation
-  const rotation = (element.rotation ?? 0) * (Math.PI / 180);
-  const cx = element.x + element.width / 2;
-  const cy = element.y + element.height / 2;
-  const hw = element.width / 2;
-  const hh = element.height / 2;
-  const cosR = Math.abs(Math.cos(rotation));
-  const sinR = Math.abs(Math.sin(rotation));
-  const rotatedHalfHeight = hw * sinR + hh * cosR;
-
-  const toolbarLeft = cx * camera.scale + camera.x;
-  const toolbarTop = (cy - rotatedHalfHeight) * camera.scale + camera.y - 12;
+  const { toolbarLeft, toolbarTop } = useMemo(() => {
+    const rotation = (element.rotation ?? 0) * (Math.PI / 180);
+    const cx = element.x + element.width / 2;
+    const cy = element.y + element.height / 2;
+    const hw = element.width / 2;
+    const hh = element.height / 2;
+    const cosR = Math.abs(Math.cos(rotation));
+    const sinR = Math.abs(Math.sin(rotation));
+    const rotatedHalfHeight = hw * sinR + hh * cosR;
+    return {
+      toolbarLeft: cx * camera.scale + camera.x,
+      toolbarTop: (cy - rotatedHalfHeight) * camera.scale + camera.y - 12,
+    };
+  }, [element.x, element.y, element.width, element.height, element.rotation, camera.x, camera.y, camera.scale]);
 
   // Connector toolbar (3 states: default, has-label, editing-label)
   if (element.type === "connector") {
@@ -105,8 +110,6 @@ export function SelectionToolbar({ element, onPropertyChange, camera, editingCon
               value={connector.labelFill}
               onChange={(color) => onPropertyChange("labelFill", color)}
               colors={SHAPE_COLORS}
-              open={activeMenu === "color"}
-              onOpenChange={(open) => setActiveMenu(open ? "color" : null)}
             />
 
             <Separator orientation="vertical" className="h-6 bg-[#2a2a2a] mx-0.5" />
@@ -114,8 +117,6 @@ export function SelectionToolbar({ element, onPropertyChange, camera, editingCon
             <FontFamilyPicker
               value={connector.labelFontFamily}
               onChange={(fontFamily) => onPropertyChange("labelFontFamily", fontFamily)}
-              open={activeMenu === "fontFamily"}
-              onOpenChange={(open) => setActiveMenu(open ? "fontFamily" : null)}
             />
 
             <Separator orientation="vertical" className="h-6 bg-[#2a2a2a] mx-0.5" />
@@ -123,8 +124,6 @@ export function SelectionToolbar({ element, onPropertyChange, camera, editingCon
             <FontSizePicker
               value={connector.labelFontSize}
               onChange={(fontSize) => onPropertyChange("labelFontSize", fontSize)}
-              open={activeMenu === "fontSize"}
-              onOpenChange={(open) => setActiveMenu(open ? "fontSize" : null)}
             />
 
             <Separator orientation="vertical" className="h-6 bg-[#2a2a2a] mx-0.5" />
@@ -176,8 +175,6 @@ export function SelectionToolbar({ element, onPropertyChange, camera, editingCon
               onPropertyChange("routingStyle", style);
               onPropertyChange("elbowMidpoint", null);
             }}
-            open={activeMenu === "routing"}
-            onOpenChange={(open) => setActiveMenu(open ? "routing" : null)}
           />
 
           <Separator orientation="vertical" className="h-6 bg-[#2a2a2a] mx-0.5" />
@@ -187,8 +184,6 @@ export function SelectionToolbar({ element, onPropertyChange, camera, editingCon
             endArrow={connector.endArrow}
             onStartArrowChange={(style) => onPropertyChange("startArrow", style)}
             onEndArrowChange={(style) => onPropertyChange("endArrow", style)}
-            open={activeMenu === "arrows"}
-            onOpenChange={(open) => setActiveMenu(open ? "arrows" : null)}
           />
 
           <Separator orientation="vertical" className="h-6 bg-[#2a2a2a] mx-0.5" />
@@ -196,8 +191,6 @@ export function SelectionToolbar({ element, onPropertyChange, camera, editingCon
           <DashStylePicker
             value={connector.dashStyle}
             onChange={(style) => onPropertyChange("dashStyle", style)}
-            open={activeMenu === "dashStyle"}
-            onOpenChange={(open) => setActiveMenu(open ? "dashStyle" : null)}
           />
 
           <Separator orientation="vertical" className="h-6 bg-[#2a2a2a] mx-0.5" />
@@ -206,8 +199,6 @@ export function SelectionToolbar({ element, onPropertyChange, camera, editingCon
             value={connector.stroke}
             onChange={(color) => onPropertyChange("stroke", color)}
             colors={SHAPE_COLORS}
-            open={activeMenu === "color"}
-            onOpenChange={(open) => setActiveMenu(open ? "color" : null)}
           />
 
           {/* "T" button to add label — only when no label exists */}
@@ -249,8 +240,6 @@ export function SelectionToolbar({ element, onPropertyChange, camera, editingCon
             value={frame.fill}
             onChange={(color) => onPropertyChange("fill", color)}
             colors={FRAME_COLORS}
-            open={activeMenu === "color"}
-            onOpenChange={(open) => setActiveMenu(open ? "color" : null)}
           />
 
           <Separator orientation="vertical" className="h-6 bg-[#2a2a2a] mx-0.5" />
@@ -262,8 +251,6 @@ export function SelectionToolbar({ element, onPropertyChange, camera, editingCon
             onStyleChange={(style) => onPropertyChange("strokeStyle", style)}
             onColorChange={(color) => onPropertyChange("stroke", color)}
             colors={FRAME_BORDER_COLORS}
-            open={activeMenu === "borderStyle"}
-            onOpenChange={(open) => setActiveMenu(open ? "borderStyle" : null)}
           />
 
           <Separator orientation="vertical" className="h-6 bg-[#2a2a2a] mx-0.5" />
@@ -317,8 +304,6 @@ export function SelectionToolbar({ element, onPropertyChange, camera, editingCon
               }
             }}
             colors={caps.colors}
-            open={activeMenu === "color"}
-            onOpenChange={(open) => setActiveMenu(open ? "color" : null)}
           />
         )}
 
@@ -330,8 +315,6 @@ export function SelectionToolbar({ element, onPropertyChange, camera, editingCon
           <FontFamilyPicker
             value={getElementFontFamily(element)}
             onChange={(fontFamily) => onPropertyChange("fontFamily", fontFamily)}
-            open={activeMenu === "fontFamily"}
-            onOpenChange={(open) => setActiveMenu(open ? "fontFamily" : null)}
           />
         )}
 
@@ -343,11 +326,21 @@ export function SelectionToolbar({ element, onPropertyChange, camera, editingCon
           <FontSizePicker
             value={getElementFontSize(element)}
             onChange={(fontSize) => onPropertyChange("fontSize", fontSize)}
-            open={activeMenu === "fontSize"}
-            onOpenChange={(open) => setActiveMenu(open ? "fontSize" : null)}
           />
         )}
       </div>
     </div>
   );
 }
+
+export const SelectionToolbar = memo(
+  SelectionToolbarComponent,
+  (prev, next) =>
+    prev.element === next.element &&
+    prev.camera.x === next.camera.x &&
+    prev.camera.y === next.camera.y &&
+    prev.camera.scale === next.camera.scale &&
+    prev.editingConnectorLabel === next.editingConnectorLabel &&
+    prev.onPropertyChange === next.onPropertyChange &&
+    prev.onStartEditingConnectorLabel === next.onStartEditingConnectorLabel
+);

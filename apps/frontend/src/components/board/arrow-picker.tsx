@@ -1,5 +1,6 @@
 "use client";
 
+import { memo } from "react";
 import type { ConnectorArrowStyle } from "@collab/shared/collab";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 
@@ -54,7 +55,7 @@ function ArrowIcon({ startArrow, endArrow }: { startArrow: ConnectorArrowStyle; 
   );
 }
 
-export function ArrowPicker({
+function ArrowPickerComponent({
   startArrow,
   endArrow,
   onStartArrowChange,
@@ -62,6 +63,7 @@ export function ArrowPicker({
   open,
   onOpenChange,
 }: ArrowPickerProps) {
+  const shouldRenderContent = open === undefined || open;
   return (
     <Popover open={open} onOpenChange={onOpenChange}>
       <PopoverTrigger asChild>
@@ -73,54 +75,58 @@ export function ArrowPicker({
           <ArrowIcon startArrow={startArrow} endArrow={endArrow} />
         </button>
       </PopoverTrigger>
-      <PopoverContent
-        side="top"
-        sideOffset={8}
-        className="w-auto bg-[#1a1a1a] border-[#2a2a2a] p-3 rounded-xl"
-      >
-        <div className="flex flex-col gap-3">
-          {/* Start endpoint */}
-          <div className="flex flex-col gap-1">
-            <span className="text-xs text-[#999] font-medium">Start</span>
-            <div className="flex items-center gap-1">
-              {ARROW_OPTIONS.map((option) => (
-                <button
-                  key={option.value}
-                  type="button"
-                  onClick={() => onStartArrowChange(option.value)}
-                  className={`px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
-                    startArrow === option.value
-                      ? "bg-[#60a5fa] text-white"
-                      : "text-[#999] hover:text-[#e0e0e0] hover:bg-[#2a2a2a]"
-                  }`}
-                >
-                  {option.label}
-                </button>
-              ))}
+      {shouldRenderContent ? (
+        <PopoverContent
+          side="top"
+          sideOffset={8}
+          className="w-auto bg-[#1a1a1a] border-[#2a2a2a] p-3 rounded-xl"
+        >
+          <div className="flex flex-col gap-3">
+            {/* Start endpoint */}
+            <div className="flex flex-col gap-1">
+              <span className="text-xs text-[#999] font-medium">Start</span>
+              <div className="flex items-center gap-1">
+                {ARROW_OPTIONS.map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    onClick={() => onStartArrowChange(option.value)}
+                    className={`px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
+                      startArrow === option.value
+                        ? "bg-[#60a5fa] text-white"
+                        : "text-[#999] hover:text-[#e0e0e0] hover:bg-[#2a2a2a]"
+                    }`}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            {/* End endpoint */}
+            <div className="flex flex-col gap-1">
+              <span className="text-xs text-[#999] font-medium">End</span>
+              <div className="flex items-center gap-1">
+                {ARROW_OPTIONS.map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    onClick={() => onEndArrowChange(option.value)}
+                    className={`px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
+                      endArrow === option.value
+                        ? "bg-[#60a5fa] text-white"
+                        : "text-[#999] hover:text-[#e0e0e0] hover:bg-[#2a2a2a]"
+                    }`}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
-          {/* End endpoint */}
-          <div className="flex flex-col gap-1">
-            <span className="text-xs text-[#999] font-medium">End</span>
-            <div className="flex items-center gap-1">
-              {ARROW_OPTIONS.map((option) => (
-                <button
-                  key={option.value}
-                  type="button"
-                  onClick={() => onEndArrowChange(option.value)}
-                  className={`px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
-                    endArrow === option.value
-                      ? "bg-[#60a5fa] text-white"
-                      : "text-[#999] hover:text-[#e0e0e0] hover:bg-[#2a2a2a]"
-                  }`}
-                >
-                  {option.label}
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-      </PopoverContent>
+        </PopoverContent>
+      ) : null}
     </Popover>
   );
 }
+
+export const ArrowPicker = memo(ArrowPickerComponent);

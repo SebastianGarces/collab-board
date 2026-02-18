@@ -27,6 +27,8 @@ type BudgetsFile = {
     canvasFps: { avgMin: number };
     concurrentUsers: { min: number };
     objectCapacity: { min: number };
+    canvasLongFramesPerMinute: { max: number };
+    inputToRenderMs: { p95Max: number };
   };
 };
 
@@ -114,6 +116,7 @@ test("meets core real-time performance budgets with 5 users", async ({ browser }
       if (!perfApi) throw new Error("Missing perf API on source page.");
       perfApi.setSyntheticObjectCount(500);
       await perfApi.runPanZoomScript(6000);
+      await perfApi.runInteractionScript(180);
       await perfApi.sendCursorProbe(150);
     });
     await receiverPage.waitForTimeout(500);
@@ -122,6 +125,12 @@ test("meets core real-time performance budgets with 5 users", async ({ browser }
     expect(summary.canvasFps.avg).toBeGreaterThanOrEqual(budgets.thresholds.canvasFps.avgMin);
     expect(summary.probeLatencyMs.cursor.p95).toBeLessThanOrEqual(
       budgets.thresholds.cursorSyncLatencyMs.p95Max
+    );
+    expect(summary.inputToRenderMs.p95).toBeLessThanOrEqual(
+      budgets.thresholds.inputToRenderMs.p95Max
+    );
+    expect(summary.canvasLongFramesPerMinute).toBeLessThanOrEqual(
+      budgets.thresholds.canvasLongFramesPerMinute.max
     );
     expect(summary.probeLatencyMs.cursor.count).toBeGreaterThan(50);
 

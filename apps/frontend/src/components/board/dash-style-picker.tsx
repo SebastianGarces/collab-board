@@ -1,5 +1,6 @@
 "use client";
 
+import { memo } from "react";
 import type { ConnectorDashStyle } from "@collab/shared/collab";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 
@@ -32,7 +33,8 @@ function DashIcon({ style }: { style: ConnectorDashStyle }) {
   );
 }
 
-export function DashStylePicker({ value, onChange, open, onOpenChange }: DashStylePickerProps) {
+function DashStylePickerComponent({ value, onChange, open, onOpenChange }: DashStylePickerProps) {
+  const shouldRenderContent = open === undefined || open;
   return (
     <Popover open={open} onOpenChange={onOpenChange}>
       <PopoverTrigger asChild>
@@ -44,29 +46,33 @@ export function DashStylePicker({ value, onChange, open, onOpenChange }: DashSty
           <DashIcon style={value} />
         </button>
       </PopoverTrigger>
-      <PopoverContent
-        side="top"
-        sideOffset={8}
-        className="w-auto bg-[#1a1a1a] border-[#2a2a2a] p-1.5 rounded-xl"
-      >
-        <div className="flex items-center gap-0.5">
-          {DASH_OPTIONS.map((option) => (
-            <button
-              key={option.value}
-              type="button"
-              onClick={() => onChange(option.value)}
-              className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs transition-colors ${
-                value === option.value
-                  ? "bg-[#60a5fa] text-white"
-                  : "text-[#999] hover:text-[#e0e0e0] hover:bg-[#2a2a2a]"
-              }`}
-            >
-              <DashIcon style={option.value} />
-              <span>{option.label}</span>
-            </button>
-          ))}
-        </div>
-      </PopoverContent>
+      {shouldRenderContent ? (
+        <PopoverContent
+          side="top"
+          sideOffset={8}
+          className="w-auto bg-[#1a1a1a] border-[#2a2a2a] p-1.5 rounded-xl"
+        >
+          <div className="flex items-center gap-0.5">
+            {DASH_OPTIONS.map((option) => (
+              <button
+                key={option.value}
+                type="button"
+                onClick={() => onChange(option.value)}
+                className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs transition-colors ${
+                  value === option.value
+                    ? "bg-[#60a5fa] text-white"
+                    : "text-[#999] hover:text-[#e0e0e0] hover:bg-[#2a2a2a]"
+                }`}
+              >
+                <DashIcon style={option.value} />
+                <span>{option.label}</span>
+              </button>
+            ))}
+          </div>
+        </PopoverContent>
+      ) : null}
     </Popover>
   );
 }
+
+export const DashStylePicker = memo(DashStylePickerComponent);
