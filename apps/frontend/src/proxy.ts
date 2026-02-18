@@ -15,21 +15,25 @@ async function isAuthenticated(request: NextRequest): Promise<boolean> {
 }
 
 export async function proxy(request: NextRequest) {
-  const { pathname } = request.nextUrl;
+  const { pathname, search } = request.nextUrl;
 
-  // Protect /canvas/* routes -- redirect to /login if not authenticated
+  // Protect /canvas/* routes -- redirect to /login with callback if unauthenticated
   if (pathname.startsWith("/canvas")) {
     const authed = await isAuthenticated(request);
     if (!authed) {
-      return NextResponse.redirect(new URL("/login", request.url));
+      const loginUrl = new URL("/login", request.url);
+      loginUrl.searchParams.set("cb", `${pathname}${search}`);
+      return NextResponse.redirect(loginUrl);
     }
   }
 
-  // Redirect /login to /canvas/main if already authenticated
+  // Redirect /login to callback (if provided) when already authenticated
   if (pathname === "/login") {
     const authed = await isAuthenticated(request);
     if (authed) {
-      return NextResponse.redirect(new URL("/canvas/main", request.url));
+      const cb = request.nextUrl.searchParams.get("cb");
+      const destination = cb && cb.startsWith("/") ? cb : "/dashboard";
+      return NextResponse.redirect(new URL(destination, request.url));
     }
   }
 

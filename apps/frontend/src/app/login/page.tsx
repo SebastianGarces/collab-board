@@ -1,12 +1,13 @@
 "use client";
 
-import { useRouter } from "next/navigation";
-import { SubmitEventHandler, useEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { SubmitEventHandler, useEffect, useMemo, useState } from "react";
 
 import { authClient } from "@/lib/auth-client";
 
 export default function LoginPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [mode, setMode] = useState<"signin" | "signup">("signin");
   const [email, setEmail] = useState("");
   const [name, setName] = useState("");
@@ -17,12 +18,19 @@ export default function LoginPage() {
   const { data: session, isPending } = authClient.useSession();
 
   const title = mode === "signin" ? "Sign in" : "Create account";
+  const postLoginRedirect = useMemo(() => {
+    const cb = searchParams.get("cb");
+    if (!cb || !cb.startsWith("/") || cb.startsWith("//")) {
+      return "/dashboard";
+    }
+    return cb;
+  }, [searchParams]);
 
   useEffect(() => {
     if (!isPending && session?.user) {
-      router.replace("/dashboard");
+      router.replace(postLoginRedirect);
     }
-  }, [isPending, session, router]);
+  }, [isPending, session, router, postLoginRedirect]);
 
   const onSubmit: SubmitEventHandler<HTMLFormElement>  = async (event) => {
     event.preventDefault();
@@ -39,6 +47,8 @@ export default function LoginPage() {
 
         if (result.error) {
           setError(result.error.message ?? "Unable to create account.");
+        } else {
+          router.replace(postLoginRedirect);
         }
       } else {
         const result = await authClient.signIn.email({
@@ -48,6 +58,8 @@ export default function LoginPage() {
 
         if (result.error) {
           setError(result.error.message ?? "Unable to sign in.");
+        } else {
+          router.replace(postLoginRedirect);
         }
       }
     } finally {
