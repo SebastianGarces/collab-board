@@ -17,6 +17,7 @@ export const TextContent = memo(function TextContent({ element, isEditing = fals
         width={element.width}
         height={element.height}
         fill="transparent"
+        perfectDrawEnabled={false}
       />
       {!isEditing && (
         <Text

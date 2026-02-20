@@ -4,6 +4,7 @@ import { memo } from "react";
 import { Circle, Rect } from "react-konva";
 import type { KonvaEventObject } from "konva/lib/Node";
 
+import { useCanvasStore } from "@/stores/canvas-store";
 import type { ElementBox, ResizeHandle } from "./shape-transform";
 
 type Pointer = { x: number; y: number };
@@ -11,7 +12,6 @@ type Pointer = { x: number; y: number };
 type ShapeResizeHandlesProps = {
   box: ElementBox;
   rotation: number;
-  zoomScale: number;
   onResizeStart: (handle: ResizeHandle, pointer: Pointer) => void;
   onResizeMove: (handle: ResizeHandle, pointer: Pointer) => void;
   onResizeEnd: (handle: ResizeHandle, pointer: Pointer) => void;
@@ -71,7 +71,6 @@ const ROTATION_CORNERS: RotationCorner[] = ["nw", "ne", "se", "sw"];
 export const ShapeResizeHandles = memo(function ShapeResizeHandles({
   box,
   rotation,
-  zoomScale,
   onResizeStart,
   onResizeMove,
   onResizeEnd,
@@ -80,6 +79,7 @@ export const ShapeResizeHandles = memo(function ShapeResizeHandles({
   onRotateEnd,
   onRotateHover,
 }: ShapeResizeHandlesProps) {
+  const zoomScale = useCanvasStore((s) => s.zoomScale);
   const visualScale = Math.max(zoomScale, 0.2);
   const handleRadius = 6 / visualScale;
   const borderPadding = 3 / visualScale;

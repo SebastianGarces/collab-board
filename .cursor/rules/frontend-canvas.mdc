@@ -57,7 +57,7 @@ globs:
 - `createCollabConnection()` creates a Y.Doc, connects via WebSocket, and returns `{ doc, disconnect, setCursor, sendPerfProbe }`.
 - Binary ArrayBuffer messages over WebSocket using `lib0` encoding.
 - Local updates sent via `doc.on("update")` handler.
-- No reconnect logic currently -- see `docs/memory/known-issues.md`.
+- Reconnect with exponential backoff (1s–30s) in `collab.ts`. See `docs/memory/known-issues.md` for resolved items.
 
 ## Performance
 

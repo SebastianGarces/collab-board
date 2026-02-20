@@ -1,5 +1,7 @@
 import { create } from "zustand";
 
+import type { ActiveTool } from "@/components/board/toolbar";
+
 type GroupDrag = {
   draggedId: string;
   startX: number;
@@ -13,6 +15,9 @@ type CanvasStoreState = {
   selectedElementIds: ReadonlySet<string>;
   groupDrag: GroupDrag | null;
   dropTargetFrameId: string | null;
+  zoomScale: number;
+  activeTool: ActiveTool;
+  isDraggingElement: boolean;
 };
 
 type CanvasStoreActions = {
@@ -23,6 +28,9 @@ type CanvasStoreActions = {
   updateGroupDrag: (dx: number, dy: number) => void;
   endGroupDrag: () => { dx: number; dy: number } | null;
   setDropTargetFrameId: (id: string | null) => void;
+  setZoomScale: (scale: number) => void;
+  setActiveTool: (tool: ActiveTool) => void;
+  setIsDraggingElement: (v: boolean) => void;
 };
 
 export type CanvasStore = CanvasStoreState & CanvasStoreActions;
@@ -31,6 +39,9 @@ export const useCanvasStore = create<CanvasStore>()((set, get) => ({
   selectedElementIds: new Set<string>(),
   groupDrag: null,
   dropTargetFrameId: null,
+  zoomScale: 1,
+  activeTool: "pointer" as ActiveTool,
+  isDraggingElement: false,
 
   selectElement: (id, shiftKey) => {
     set((state) => {
@@ -80,5 +91,17 @@ export const useCanvasStore = create<CanvasStore>()((set, get) => ({
 
   setDropTargetFrameId: (id) => {
     set({ dropTargetFrameId: id });
+  },
+
+  setZoomScale: (scale) => {
+    set({ zoomScale: scale });
+  },
+
+  setActiveTool: (tool) => {
+    set({ activeTool: tool });
+  },
+
+  setIsDraggingElement: (v) => {
+    set({ isDraggingElement: v });
   },
 }));

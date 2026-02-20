@@ -1,6 +1,39 @@
 /** Wire format: first varuint in every WS frame identifies the channel. */
 export const WS_MESSAGE_SYNC = 0;
 export const WS_MESSAGE_PERF_PROBE = 1;
+export const WS_MESSAGE_AI = 2;
+export const WS_MESSAGE_PRESENCE = 3;
+
+/** AI chat message types sent over WS_MESSAGE_AI channel as JSON via lib0 varString. */
+
+export type AiConversationMessage = {
+  role: "user" | "assistant";
+  content: string;
+};
+
+export type AiChatRequest = {
+  type: "ai_request";
+  id: string;
+  prompt: string;
+  conversationHistory?: AiConversationMessage[];
+  selectedElementIds?: string[];
+};
+
+export type AiToolCallSummary = {
+  toolName: string;
+  elementCount: number;
+};
+
+export type AiChatResponse = {
+  type: "ai_response";
+  id: string;
+  text: string;
+  toolCallSummary: AiToolCallSummary[];
+  createdElementIds?: string[];
+  error?: string;
+};
+
+export type AiChatMessage = AiChatRequest | AiChatResponse;
 
 export type Cursor = {
   x: number;
@@ -33,7 +66,7 @@ export type PerfProbeMessage = {
 export type ElementType = "sticky-note" | "rectangle" | "circle" | "line" | "text" | "frame" | "connector";
 
 export type FrameStrokeStyle = "solid" | "dashed" | "none";
-export type ConnectorRoutingStyle = "orthogonal" | "curved" | "straight";
+export type ConnectorRoutingStyle = "curved";
 export type ConnectorArrowStyle = "none" | "arrow" | "diamond";
 export type ConnectorDashStyle = "solid" | "dashed" | "dotted";
 
@@ -108,7 +141,6 @@ export interface ConnectorElement extends BaseElement {
   stroke: string;
   strokeWidth: number;
   dashStyle: ConnectorDashStyle;
-  elbowMidpoint: number | null;
   labelText: string;
   labelFontSize: number;
   labelFontFamily: string;

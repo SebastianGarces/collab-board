@@ -19,9 +19,13 @@
   "dependencies": {
     "@collab/shared": "workspace:*",
     "@elysiajs/cors": "latest",
+    "@langchain/core": "^1.1.26",
+    "@langchain/google": "^0.1.1",
+    "@langchain/openai": "^1.2.8",
     "better-auth": "latest",
     "drizzle-orm": "latest",
     "elysia": "latest",
+    "langsmith": "^0.5.4",
     "lib0": "0.2.117",
     "pg": "latest",
     "y-protocols": "latest",

@@ -111,3 +111,57 @@ Append-only log. Never edit past entries. If a decision is superseded, add a new
 **Context:** Heavy boards (dozens of frames and hundreds of objects) caused interaction regressions: low FPS, slow selection toolbar/dropdowns, and lag during resize/drag operations due to broad rerenders and per-event Yjs writes.
 **Decision:** Adopt a performance baseline that (1) keeps transient pointer state out of top-level React state, (2) batches high-frequency drag/resize/rotate writes to Yjs on `requestAnimationFrame`, (3) relies on narrow Zustand selectors with `useShallow` when grouping values, and (4) culls offscreen canvas elements while keeping selected elements rendered.
 **Consequences:** Canvas interaction remains responsive under higher object counts, overlay controls become less sensitive to pointer churn, and perf budgets now include `inputToRenderMs` and long-frame enforcement to catch regressions in CI.
+
+---
+
+### ADR-012: AI Agent uses Vercel AI SDK with Langfuse OTEL tracing
+**Date:** 2026-02-18
+**Status:** superseded by ADR-013
+**Context:** The AI board agent needs LLM integration, function calling, and observability for cost analysis. Multiple SDK options were evaluated (LangChain, Vercel AI SDK, raw OpenAI SDK).
+**Decision:** Use Vercel AI SDK (`ai` + `@ai-sdk/openai`) with `generateText()` + `stopWhen: stepCountIs(10)` for multi-step commands. Langfuse observability via OpenTelemetry (`@langfuse/otel` + `@langfuse/tracing`) initialized before any AI SDK calls. AI commands flow over a new `WS_MESSAGE_AI=2` WebSocket channel as JSON-in-lib0-varString. Batch tools (`batchCreateElements`, `batchModifyElements`) handle multi-element operations in a single Yjs transaction. Per-tool execution is traced with custom Langfuse spans via `startObservation()`.
+**Consequences:** Automatic capture of LLM tokens/cost/latency via OTEL, plus granular per-tool spans. The AI handler runs in the main process (I/O-bound await doesn't block the event loop). Cost analysis script queries the Langfuse Metrics API. AI SDK v6 requires `inputSchema` (with `zodSchema()` wrapper) instead of `parameters`, and `stopWhen` instead of `maxSteps`.
+
+---
+
+### ADR-013: AI Agent uses LangChain.js with Langfuse CallbackHandler
+**Date:** 2026-02-19
+**Status:** superseded by ADR-014
+**Context:** AI command latency exceeded performance budgets (p95 5.4s vs 2s target). Classmates reported significant latency improvements (15s → &lt;2s) after switching from Vercel AI SDK to LangChain.
+**Decision:** Replace Vercel AI SDK with LangChain.js (`@langchain/openai` + `@langchain/core`). Use `ChatOpenAI.bindTools()` with a manual tool-calling loop (max 4 steps). Langfuse tracing via `@langfuse/langchain` `CallbackHandler` passed to `model.invoke()`; OTEL `LangfuseSpanProcessor` retained for infrastructure. Tools defined with LangChain `tool()` from `@langchain/core/tools`, returning JSON strings. Keep camelCase tool names for compatibility with reliability scripts.
+**Consequences:** Simpler, more direct API calls per step. CallbackHandler captures LLM and tool spans automatically. AI perf/reliability/trace-review scripts updated for LangChain observation names. WebSocket protocol and Yjs integration unchanged.
+
+---
+
+### ADR-014: Switch from Langfuse to LangSmith for AI observability
+**Date:** 2026-02-19
+**Status:** accepted
+**Context:** Langfuse's LangChain integration via CallbackHandler produced unreliable trace structures. Single-step vs multi-step classification was fragile — observation counts didn't map cleanly to semantic step counts, causing perf budgets to never fire on single-step commands. LangSmith, as LangChain's native observability platform, provides first-class `run_type` typing (`llm`, `tool`, `chain`) for each span.
+**Decision:** Replace Langfuse with LangSmith. Remove `@langfuse/*` and `@opentelemetry/sdk-node` packages. Use `traceable()` from `langsmith/traceable` to wrap `handleAiCommand` as the root trace with `tags: ["ai-command"]`. LangChain auto-traces `model.invoke()` and tool calls to LangSmith via `LANGCHAIN_TRACING_V2` env var. All analysis scripts (`ai-perf-check`, `ai-trace-review`, `ai-reliability-check`, `ai-cost-analysis`) rewritten to use the `langsmith` SDK `Client.listRuns()` with native `run_type` filtering. Classification: `tool` run count <= 1 = single-step, >= 2 = multi-step.
+**Consequences:** Native LangChain integration means no callback handler needed — auto-tracing handles LLM and tool spans. Classification by `run_type === "tool"` count is deterministic. Langfuse env vars (`LANGFUSE_*`) no longer needed; LangSmith env vars (`LANGCHAIN_API_KEY`, `LANGCHAIN_TRACING_V2`, `LANGCHAIN_PROJECT`) required. Cost tracking via `run.total_cost`, `run.prompt_tokens`, `run.completion_tokens`.
+
+---
+
+### ADR-015: AI latency optimizations (skip Generation 2, gpt-4o-mini, tracing off hot path)
+**Date:** 2026-02-19
+**Status:** accepted
+**Context:** Single-step AI command p95 was 3644ms (budget 2000ms). Two sequential LLM round-trips per command: (1) tool call generation, (2) summary text generation. The second call was redundant for mutations — `buildSummaryText()` already produces the same output.
+**Decision:** (1) Skip the second LLM call when a mutation tool succeeds — break out of the agent loop and use `buildSummaryText()`. (2) Switch from gpt-4o to gpt-4o-mini for faster inference and lower cost. (3) Send response to client before `awaitAllCallbacks()` — fire-and-forget tracing flush.
+**Consequences:** Single-step commands reduced from 2 LLM calls to 1. Expected p95 ~1200–2000ms. If gpt-4o-mini reliability drops below 80%, revert to gpt-4o and rely on optimizations 1 and 3 alone.
+
+---
+
+### ADR-016: AI latency optimizations (getBoardState O(k), prompt trim, deferred occupied region)
+**Date:** 2026-02-19
+**Status:** accepted
+**Context:** Single-step p95 remained above 2000ms budget (2343ms). Analysis identified hotspots: getBoardState iterating all elements when elementIds provided, large system prompt, and unconditional occupied-region computation.
+**Decision:** (1) In `getBoardState`, use direct `elementsMap.get(id)` for each requested ID instead of full forEach scan — O(k) vs O(n). (2) Trim SYSTEM_PROMPT verbosity; reduce MAX_HISTORY_MESSAGES from 10 to 6. (3) Compute occupied region only when prompt suggests create/layout (heuristic: create, add, make, draw, put, new, layout, arrange, grid, row, column). (4) Add traceable spans for ai-message-assembly and ai-summary-build for root-cause analysis.
+**Consequences:** Lower token load and faster tool execution. Validation requires new traces from running the updated code; `ai:perf-check` uses historical traces.
+
+---
+
+### ADR-017: bulkCreateElements template tool for large batch creation
+**Date:** 2026-02-19
+**Status:** accepted
+**Context:** gpt-4.1-nano cannot reliably generate 200+ element JSON arrays in a single tool call — it truncates or ignores the requested count (e.g. creates 6 instead of 200). Even capable models would need ~5000 output tokens for 200 elements, blowing the 2000ms latency budget.
+**Decision:** Add a `bulkCreateElements` tool that accepts a compact template spec (type, count, columns, gap, colors, textPattern, frameTitle) and expands it server-side into individual Yjs elements. The model outputs ~50 tokens instead of ~5000. System prompt rule 14 directs the model to use this tool for 7+ elements of the same type.
+**Consequences:** Bulk creation is deterministic and fast (server-side expansion). The model only needs to specify the pattern, not enumerate elements. For mixed-type batches or small counts (<7), `batchCreateElements` remains the right tool.

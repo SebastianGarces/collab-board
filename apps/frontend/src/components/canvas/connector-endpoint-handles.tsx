@@ -1,16 +1,16 @@
 "use client";
 
-import { memo } from "react";
 import type { KonvaEventObject } from "konva/lib/Node";
+import { memo } from "react";
 import { Circle } from "react-konva";
 
 import type { BoardElement, ConnectorElement } from "@collab/shared/collab";
+import { useCanvasStore } from "@/stores/canvas-store";
 import { resolveEndpoints } from "./connector-utils";
 
 type ConnectorEndpointHandlesProps = {
   element: ConnectorElement;
-  elements: BoardElement[];
-  zoomScale: number;
+  elementsById: Map<string, BoardElement>;
   onEndpointDragStart?: () => void;
   onEndpointDrag: (endpoint: "from" | "to", worldX: number, worldY: number) => void;
   onEndpointDragEnd: (endpoint: "from" | "to", worldX: number, worldY: number) => void;
@@ -31,13 +31,13 @@ function getWorldPointer(event: KonvaEventObject<DragEvent>): { x: number; y: nu
 
 export const ConnectorEndpointHandles = memo(function ConnectorEndpointHandles({
   element,
-  elements,
-  zoomScale,
+  elementsById,
   onEndpointDragStart,
   onEndpointDrag,
   onEndpointDragEnd,
 }: ConnectorEndpointHandlesProps) {
-  const { from, to } = resolveEndpoints(element, elements);
+  const zoomScale = useCanvasStore((s) => s.zoomScale);
+  const { from, to } = resolveEndpoints(element, elementsById);
   const visualScale = Math.max(zoomScale, 0.2);
   const handleRadius = 7 / visualScale;
 

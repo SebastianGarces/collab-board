@@ -1,7 +1,7 @@
 "use client";
 
 import { memo, useMemo } from "react";
-import { Eye, EyeClosed, Type } from "lucide-react";
+import { Eye, EyeClosed, Trash2, Type } from "lucide-react";
 import type { BoardElement, ConnectorElement, ElementType, FrameElement } from "@collab/shared/collab";
 import { STICKY_NOTE_COLORS, SHAPE_COLORS, FRAME_COLORS, FRAME_BORDER_COLORS } from "@collab/shared/collab";
 import { Separator } from "@/components/ui/separator";
@@ -9,7 +9,6 @@ import { ColorPicker } from "./color-picker";
 import { FontFamilyPicker } from "./font-family-picker";
 import { FontSizePicker } from "./font-size-picker";
 import { BorderStylePicker } from "./border-style-picker";
-import { RoutingStylePicker } from "./routing-style-picker";
 import { ArrowPicker } from "./arrow-picker";
 import { DashStylePicker } from "./dash-style-picker";
 
@@ -63,6 +62,7 @@ type SelectionToolbarProps = {
   camera: { x: number; y: number; scale: number };
   editingConnectorLabel?: boolean;
   onStartEditingConnectorLabel?: () => void;
+  onDissolveFrame?: (id: string) => void;
 };
 
 function SelectionToolbarComponent({
@@ -71,6 +71,7 @@ function SelectionToolbarComponent({
   camera,
   editingConnectorLabel,
   onStartEditingConnectorLabel,
+  onDissolveFrame,
 }: SelectionToolbarProps) {
   const caps = useMemo(() => ELEMENT_CAPABILITIES[element.type], [element.type]);
 
@@ -99,6 +100,7 @@ function SelectionToolbarComponent({
       return (
         <div
           className="absolute z-40 pointer-events-auto"
+          onMouseDown={(e) => e.preventDefault()}
           style={{
             left: toolbarLeft,
             top: toolbarTop,
@@ -169,16 +171,6 @@ function SelectionToolbarComponent({
         }}
       >
         <div className="flex items-center gap-1 bg-[#1a1a1a] border border-[#2a2a2a] rounded-xl px-2 py-1.5 shadow-lg">
-          <RoutingStylePicker
-            value={connector.routingStyle}
-            onChange={(style) => {
-              onPropertyChange("routingStyle", style);
-              onPropertyChange("elbowMidpoint", null);
-            }}
-          />
-
-          <Separator orientation="vertical" className="h-6 bg-[#2a2a2a] mx-0.5" />
-
           <ArrowPicker
             startArrow={connector.startArrow}
             endArrow={connector.endArrow}
@@ -272,6 +264,20 @@ function SelectionToolbarComponent({
               <Eye className="h-4 w-4" />
             )}
           </button>
+
+          {onDissolveFrame && (
+            <>
+              <Separator orientation="vertical" className="h-6 bg-[#2a2a2a] mx-0.5" />
+              <button
+                type="button"
+                onClick={() => onDissolveFrame(frame.id)}
+                className="flex items-center justify-center h-7 w-7 rounded-md text-[#999] hover:text-red-400 hover:bg-[#2a2a2a] transition-colors"
+                title="Delete frame only (keep contents)"
+              >
+                <Trash2 className="h-4 w-4" />
+              </button>
+            </>
+          )}
         </div>
       </div>
     );
@@ -342,5 +348,6 @@ export const SelectionToolbar = memo(
     prev.camera.scale === next.camera.scale &&
     prev.editingConnectorLabel === next.editingConnectorLabel &&
     prev.onPropertyChange === next.onPropertyChange &&
-    prev.onStartEditingConnectorLabel === next.onStartEditingConnectorLabel
+    prev.onStartEditingConnectorLabel === next.onStartEditingConnectorLabel &&
+    prev.onDissolveFrame === next.onDissolveFrame
 );

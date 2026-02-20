@@ -19,6 +19,7 @@ export const RectangleContent = memo(function RectangleContent({ element }: Rect
       strokeWidth={2}
       cornerRadius={2}
       perfectDrawEnabled={false}
+      shadowForStrokeEnabled={false}
     />
   );
 });

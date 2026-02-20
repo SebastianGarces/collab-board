@@ -23,6 +23,7 @@ export const LineContent = memo(function LineContent({ element }: LineContentPro
       lineCap="round"
       lineJoin="round"
       hitStrokeWidth={Math.max(element.strokeWidth, 12)}
+      perfectDrawEnabled={false}
     />
   );
 });

@@ -4,17 +4,47 @@ import { auth } from "../auth/auth";
 import { RoomManager, type SocketLike } from "./room-manager";
 import { drizzlePersistence } from "./persistence";
 import { COLLAB_WS_PATH } from "./protocol";
+import { handleAiMessage } from "../ai/handler";
 
 const roomManager = new RoomManager(drizzlePersistence);
+
+roomManager.onAiMessage = (roomId, socket, doc, payload) => {
+  const userId = socketUserIds.get(socket) ?? "unknown";
+  handleAiMessage(roomId, socket, doc, payload, userId, roomManager).catch((err) => {
+    console.error("[collab] AI handler error:", err);
+  });
+};
+
+const socketUserIds = new Map<SocketLike, string>();
 const METRICS_LOG_INTERVAL_MS = 30_000;
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function formatMetrics(m: ReturnType<typeof roomManager.getMetricsSnapshot>): string {
+  const b = m.processingBuckets;
+  const total = b.le_1ms + b.le_5ms + b.le_10ms + b.le_25ms + b.le_50ms + b.gt_50ms;
+  const pctBar = (count: number) => {
+    const pct = total > 0 ? (count / total) * 100 : 0;
+    return `${String(count).padStart(6)} ${pct > 0 ? `(${pct.toFixed(0)}%)` : ""}`;
+  };
+
+  return [
+    `[collab] ── metrics ──────────────────────────────`,
+    `  rooms: ${m.roomCount}  |  conns: +${m.connectionsTotal} / -${m.disconnectionsTotal}`,
+    `  messages: ${m.messagesTotal.toLocaleString()} total  (sync: ${m.syncMessagesTotal.toLocaleString()}, probe: ${m.perfProbeMessagesTotal}, invalid: ${m.invalidMessagesTotal})`,
+    `  traffic:  in ${formatBytes(m.bytesInTotal)}  |  out ${formatBytes(m.bytesOutTotal)}`,
+    `  latency:  ≤1ms ${pctBar(b.le_1ms)}  |  ≤5ms ${pctBar(b.le_5ms)}  |  ≤10ms ${pctBar(b.le_10ms)}`,
+    `            ≤25ms ${pctBar(b.le_25ms)}  |  ≤50ms ${pctBar(b.le_50ms)}  |  >50ms ${pctBar(b.gt_50ms)}`,
+    `  ─────────────────────────────────────────────────`,
+  ].join("\n");
+}
+
 const collabMetricsInterval = setInterval(() => {
-  console.info(
-    JSON.stringify({
-      type: "collab_metrics",
-      at: new Date().toISOString(),
-      ...roomManager.getMetricsSnapshot()
-    })
-  );
+  console.info(formatMetrics(roomManager.getMetricsSnapshot()));
 }, METRICS_LOG_INTERVAL_MS);
 collabMetricsInterval.unref?.();
 
@@ -61,6 +91,7 @@ export const collabWsPlugin = new Elysia({ name: "collab-ws" })
         }
       };
       (ws.data as any)._socket = socket;
+      socketUserIds.set(socket, session.user.id);
       roomManager.connect(getRoomId(ws), socket);
 
       // Replay messages that arrived while awaiting auth
@@ -88,6 +119,7 @@ export const collabWsPlugin = new Elysia({ name: "collab-ws" })
       (ws.data as any)._pendingMessages = null;
       const socket = getSocket(ws);
       if (!socket) return;
+      socketUserIds.delete(socket);
       roomManager.disconnect(getRoomId(ws), socket);
     }
   })

@@ -35,13 +35,12 @@ type InteractiveShapeProps = {
   onResize?: (id: string, box: ElementBox) => void;
   onRotate?: (id: string, rotation: number) => void;
   onRotateCursorChange?: (state: RotationCursorState) => void;
-  zoomScale?: number;
   onDblClick?: (id: string) => void;
   hideSelectionOutline?: boolean;
-  getDragChildIds?: () => string[];
+  getDragChildIds?: ((frameId: string) => string[]) | (() => string[]);
   onGroupDragStart?: () => void;
   onGroupDragMove?: (dx: number, dy: number) => void;
-  onDragPositionUpdate?: (x: number, y: number) => void;
+  onDragPositionUpdate?: (id: string, x: number, y: number, width: number, height: number) => void;
   children: ReactNode;
 };
 
@@ -58,7 +57,6 @@ function InteractiveShapeComponent({
   onResize,
   onRotate,
   onRotateCursorChange,
-  zoomScale = 1,
   onDblClick,
   hideSelectionOutline = false,
   getDragChildIds,
@@ -91,9 +89,17 @@ function InteractiveShapeComponent({
 
   const effectiveDraggable = draggable && !isResizing && !isRotating;
 
-  // For center-pivot rotation: position is top-left + half width/height, offset is half width/height
-  const renderX = element.x + groupDragDx + element.width / 2;
-  const renderY = element.y + groupDragDy + element.height / 2;
+  const dragEndOverrideRef = useRef<{ x: number; y: number } | null>(null);
+
+  const override = dragEndOverrideRef.current;
+  if (override && Math.abs(element.x - override.x) < 1 && Math.abs(element.y - override.y) < 1) {
+    dragEndOverrideRef.current = null;
+  }
+  const effectiveX = dragEndOverrideRef.current ? dragEndOverrideRef.current.x : element.x;
+  const effectiveY = dragEndOverrideRef.current ? dragEndOverrideRef.current.y : element.y;
+
+  const renderX = effectiveX + groupDragDx + element.width / 2;
+  const renderY = effectiveY + groupDragDy + element.height / 2;
 
   const beginResize = (handle: ResizeHandle, pointer: { x: number; y: number }) => {
     resizeSessionRef.current = {
@@ -185,6 +191,7 @@ function InteractiveShapeComponent({
 
   return (
     <Group
+      id={`element-${element.id}`}
       x={renderX}
       y={renderY}
       offsetX={element.width / 2}
@@ -208,7 +215,11 @@ function InteractiveShapeComponent({
         // Group position is center due to offset, convert back to top-left for tracking
         const topLeftX = e.target.x() - element.width / 2;
         const topLeftY = e.target.y() - element.height / 2;
-        const childIds = getDragChildIds?.() ?? [];
+        const childIds = getDragChildIds
+          ? (getDragChildIds.length === 1
+              ? (getDragChildIds as (frameId: string) => string[])(element.id)
+              : (getDragChildIds as () => string[])())
+          : [];
         startGroupDrag(element.id, topLeftX, topLeftY, childIds);
         onGroupDragStart?.();
         onDragStart?.(element.id);
@@ -225,11 +236,12 @@ function InteractiveShapeComponent({
         } else {
           onDragMove?.(element.id, topLeftX, topLeftY);
         }
-        onDragPositionUpdate?.(topLeftX, topLeftY);
+        onDragPositionUpdate?.(element.id, topLeftX, topLeftY, element.width, element.height);
       }}
       onDragEnd={(e) => {
         const finalTopLeftX = e.target.x() - element.width / 2;
         const finalTopLeftY = e.target.y() - element.height / 2;
+        dragEndOverrideRef.current = { x: finalTopLeftX, y: finalTopLeftY };
         onDragEnd(element.id, finalTopLeftX, finalTopLeftY);
         requestAnimationFrame(() => endGroupDrag());
       }}
@@ -253,7 +265,6 @@ function InteractiveShapeComponent({
         <ShapeResizeHandles
           box={{ x: 0, y: 0, width: element.width, height: element.height }}
           rotation={element.rotation ?? 0}
-          zoomScale={zoomScale}
           onResizeStart={beginResize}
           onResizeMove={updateResize}
           onResizeEnd={finishResize}

@@ -4,11 +4,12 @@ import { memo } from "react";
 import type { KonvaEventObject } from "konva/lib/Node";
 import { Circle } from "react-konva";
 
+import { useCanvasStore } from "@/stores/canvas-store";
+
 type Pointer = { x: number; y: number };
 
 type LineEndpointHandlesProps = {
   points: number[];
-  zoomScale: number;
   onEndpointDragStart?: () => void;
   onEndpointDrag: (endpointIndex: number, worldX: number, worldY: number) => void;
   onEndpointDragEnd: (endpointIndex: number, worldX: number, worldY: number) => void;
@@ -29,11 +30,11 @@ function getWorldPointer(event: KonvaEventObject<DragEvent>): Pointer | null {
 
 export const LineEndpointHandles = memo(function LineEndpointHandles({
   points,
-  zoomScale,
   onEndpointDragStart,
   onEndpointDrag,
   onEndpointDragEnd,
 }: LineEndpointHandlesProps) {
+  const zoomScale = useCanvasStore((s) => s.zoomScale);
   if (points.length < 4) return null;
 
   const visualScale = Math.max(zoomScale, 0.2);

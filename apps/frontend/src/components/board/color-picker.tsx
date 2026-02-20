@@ -47,6 +47,7 @@ function ColorPickerComponent({ value, onChange, colors, open, onOpenChange }: C
       <PopoverContent
         side="top"
         sideOffset={8}
+        onOpenAutoFocus={(e) => e.preventDefault()}
         className="w-auto bg-[#1a1a1a] border-[#2a2a2a] p-2 rounded-xl"
       >
         <div className="flex items-center gap-1.5">

@@ -23,9 +23,14 @@
     "db:down": "docker compose down",
     "db:logs": "docker compose logs -f postgres",
     "migrate": "bun run --env-file=.env --filter @collab/backend migrate",
-    "seed:public-board": "bun run --env-file=.env --filter @collab/backend seed:public-board"
+    "seed:public-board": "bun run --env-file=.env --filter @collab/backend seed:public-board",
+    "ai:cost-analysis": "bun --env-file=.env scripts/ai-cost-analysis.ts",
+    "ai:perf-check": "bun --env-file=.env scripts/ai-perf-check.ts",
+    "ai:trace-review": "bun --env-file=.env scripts/ai-trace-review.ts",
+    "ai:reliability-check": "bun --env-file=.env scripts/ai-reliability-check.ts"
   },
   "devDependencies": {
+    "langsmith": "^0.5.4",
     "typescript": "^5.9.3"
   }
 }

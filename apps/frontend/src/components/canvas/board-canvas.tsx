@@ -1,35 +1,253 @@
 "use client";
 
 import type Konva from "konva";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Circle as KonvaCircle, Layer, Rect, Stage } from "react-konva";
 
-import type { BoardElement, ConnectorElement, FrameElement } from "@collab/shared/collab";
+import type { BoardElement, FrameElement } from "@collab/shared/collab";
 
 import { findFrameAtPoint, getElementAABB, getFrameChildIds } from "@/lib/element-utils";
+import type { SpatialIndex } from "@/lib/spatial-index";
 import { useCanvasStore } from "@/stores/canvas-store";
-import { InteractiveShape } from "./interactive-shape";
-import { StickyNote } from "./sticky-note";
-import { RectangleContent } from "./rectangle-element";
 import { CircleContent } from "./circle-element";
-import { LineContent } from "./line-element";
-import { LineEndpointHandles } from "./line-endpoint-handles";
-import { TextContent } from "./text-element";
-import { FrameContent } from "./frame-element";
 import { ConnectorContent } from "./connector-element";
 import { ConnectorEndpointHandles } from "./connector-endpoint-handles";
-import { ConnectorMidpointHandles } from "./connector-midpoint-handles";
+import { FrameContent } from "./frame-element";
+import { InteractiveShape } from "./interactive-shape";
+import { LineContent } from "./line-element";
+import { LineEndpointHandles } from "./line-endpoint-handles";
+import { RectangleContent } from "./rectangle-element";
 import type { ElementBox } from "./shape-transform";
+import { StickyNote } from "./sticky-note";
+import { TextContent } from "./text-element";
 
 import type { RotationCursorState } from "./interactive-shape";
 
 const VIEWPORT_CULL_MARGIN = 300;
 
+// ---------------------------------------------------------------------------
+// Memoized element wrapper components
+// These create a memo boundary so that selection changes only re-render the
+// 2 affected elements (old + new selection), not the entire board.
+// ---------------------------------------------------------------------------
+
+type StaticElementNodeProps = {
+  element: BoardElement;
+  onSelect: (id: string, shiftKey: boolean) => void;
+  onDragEnd: (id: string, x: number, y: number) => void;
+  dropTargetFrameId: string | null;
+  elementsById: Map<string, BoardElement>;
+  dragPositionOverrides?: Map<string, { x: number; y: number }>;
+};
+
+function StaticElementNodeComponent({
+  element: el,
+  onSelect,
+  onDragEnd,
+  dropTargetFrameId,
+  elementsById,
+  dragPositionOverrides,
+}: StaticElementNodeProps) {
+  const isLine = el.type === "line";
+  const isConnector = el.type === "connector";
+  const isFrame = el.type === "frame";
+  return (
+    <InteractiveShape
+      element={el}
+      isSelected={false}
+      multiSelected={false}
+      draggable={false}
+      onSelect={onSelect}
+      onDragEnd={onDragEnd}
+      hideSelectionOutline={isLine || isConnector}
+    >
+      {el.type === "sticky-note" && <StickyNote element={el} />}
+      {el.type === "rectangle" && <RectangleContent element={el} />}
+      {el.type === "circle" && <CircleContent element={el} />}
+      {el.type === "line" && <LineContent element={el} />}
+      {el.type === "text" && <TextContent element={el} />}
+      {isFrame && (
+        <FrameContent
+          element={el as FrameElement}
+          isDropTarget={dropTargetFrameId === el.id}
+        />
+      )}
+      {isConnector && el.type === "connector" && (
+        <ConnectorContent
+          element={el}
+          elementsById={elementsById}
+          dragPositionOverrides={dragPositionOverrides}
+        />
+      )}
+    </InteractiveShape>
+  );
+}
+
+const StaticElementNode = memo(StaticElementNodeComponent, (prev, next) => {
+  if (prev.element !== next.element) return false;
+  if (prev.onSelect !== next.onSelect) return false;
+  if (prev.onDragEnd !== next.onDragEnd) return false;
+  if (prev.element.type === "frame" && prev.dropTargetFrameId !== next.dropTargetFrameId) return false;
+  if (prev.element.type === "connector") {
+    if (prev.elementsById !== next.elementsById) return false;
+    if (prev.dragPositionOverrides !== next.dragPositionOverrides) return false;
+  }
+  return true;
+});
+
+type ActiveElementNodeProps = {
+  element: BoardElement;
+  isSelected: boolean;
+  multiSelected: boolean;
+  draggable: boolean;
+  onSelect: (id: string, shiftKey: boolean) => void;
+  onDragStart?: (id: string) => void;
+  onDragMove?: (id: string, x: number, y: number) => void;
+  onDragEnd: (id: string, x: number, y: number) => void;
+  onGroupDragStart: () => void;
+  onGroupDragMove: (dx: number, dy: number) => void;
+  onResize: (id: string, box: ElementBox) => void;
+  onRotate: (id: string, rotation: number) => void;
+  onRotateCursorChange?: (state: RotationCursorState) => void;
+  onDblClick: (id: string) => void;
+  getDragChildIds: (frameId: string) => string[];
+  onDragPositionUpdate: (id: string, x: number, y: number, width: number, height: number) => void;
+  editingElementId: string | null;
+  editingConnectorLabel: boolean;
+  dropTargetFrameId: string | null;
+  elementsById: Map<string, BoardElement>;
+  dragPositionOverrides?: Map<string, { x: number; y: number }>;
+  onLineEndpointDrag: (idx: number, wx: number, wy: number, elementId: string) => void;
+  onLineEndpointDragEnd: (idx: number, wx: number, wy: number, elementId: string) => void;
+  onConnectorEndpointDrag: (endpoint: "from" | "to", wx: number, wy: number, elementId: string) => void;
+  onConnectorEndpointDragEnd: (endpoint: "from" | "to", wx: number, wy: number, elementId: string) => void;
+  onConnectorLabelClick: (elementId: string) => void;
+};
+
+function ActiveElementNodeComponent({
+  element: el,
+  isSelected,
+  multiSelected,
+  draggable,
+  onSelect,
+  onDragStart,
+  onDragMove,
+  onDragEnd,
+  onGroupDragStart,
+  onGroupDragMove,
+  onResize,
+  onRotate,
+  onRotateCursorChange,
+  onDblClick,
+  getDragChildIds,
+  onDragPositionUpdate,
+  editingElementId,
+  editingConnectorLabel,
+  dropTargetFrameId,
+  elementsById,
+  dragPositionOverrides,
+  onLineEndpointDrag,
+  onLineEndpointDragEnd,
+  onConnectorEndpointDrag,
+  onConnectorEndpointDragEnd,
+  onConnectorLabelClick,
+}: ActiveElementNodeProps) {
+  const isLine = el.type === "line";
+  const isConnector = el.type === "connector";
+  const isFrame = el.type === "frame";
+  const resizable = !isLine && !isConnector;
+  const editable = el.type === "sticky-note" || el.type === "text" || isFrame || isConnector;
+  return (
+    <InteractiveShape
+      element={el}
+      isSelected={isSelected}
+      multiSelected={multiSelected}
+      draggable={draggable && !isConnector}
+      onSelect={onSelect}
+      onDragStart={onDragStart}
+      onDragMove={onDragMove}
+      onDragEnd={onDragEnd}
+      onGroupDragStart={onGroupDragStart}
+      onGroupDragMove={onGroupDragMove}
+      resizable={resizable}
+      onResize={resizable ? onResize : undefined}
+      onRotate={resizable ? onRotate : undefined}
+      onRotateCursorChange={resizable ? onRotateCursorChange : undefined}
+      onDblClick={editable ? onDblClick : undefined}
+      hideSelectionOutline={isLine || isConnector}
+      getDragChildIds={isFrame ? getDragChildIds : undefined}
+      onDragPositionUpdate={!isFrame ? onDragPositionUpdate : undefined}
+    >
+      {el.type === "sticky-note" && (
+        <StickyNote element={el} isEditing={el.id === editingElementId} />
+      )}
+      {el.type === "rectangle" && <RectangleContent element={el} />}
+      {el.type === "circle" && <CircleContent element={el} />}
+      {el.type === "line" && <LineContent element={el} />}
+      {el.type === "text" && (
+        <TextContent element={el} isEditing={el.id === editingElementId} />
+      )}
+      {el.type === "frame" && (
+        <FrameContent
+          element={el as FrameElement}
+          isEditing={el.id === editingElementId}
+          isDropTarget={dropTargetFrameId === el.id}
+        />
+      )}
+      {isConnector && el.type === "connector" && (
+        <ConnectorContent
+          element={el}
+          elementsById={elementsById}
+          dragPositionOverrides={dragPositionOverrides}
+          isLabelEditing={editingConnectorLabel && el.id === editingElementId}
+          onLabelClick={
+            isSelected && el.labelText.trim() !== ""
+              ? () => onConnectorLabelClick(el.id)
+              : undefined
+          }
+        />
+      )}
+      {isLine && isSelected && el.type === "line" && (
+        <LineEndpointHandles
+          points={el.points}
+          onEndpointDrag={(idx, wx, wy) => onLineEndpointDrag(idx, wx, wy, el.id)}
+          onEndpointDragEnd={(idx, wx, wy) => onLineEndpointDragEnd(idx, wx, wy, el.id)}
+        />
+      )}
+      {isConnector && isSelected && el.type === "connector" && (
+        <ConnectorEndpointHandles
+          element={el}
+          elementsById={elementsById}
+          onEndpointDrag={(endpoint, wx, wy) => onConnectorEndpointDrag(endpoint, wx, wy, el.id)}
+          onEndpointDragEnd={(endpoint, wx, wy) => onConnectorEndpointDragEnd(endpoint, wx, wy, el.id)}
+        />
+      )}
+    </InteractiveShape>
+  );
+}
+
+const ActiveElementNode = memo(ActiveElementNodeComponent, (prev, next) => {
+  if (prev.element !== next.element) return false;
+  if (prev.isSelected !== next.isSelected) return false;
+  if (prev.multiSelected !== next.multiSelected) return false;
+  if (prev.draggable !== next.draggable) return false;
+  // Editing-related props only matter for the element being edited
+  const prevIsEditing = prev.editingElementId === prev.element.id;
+  const nextIsEditing = next.editingElementId === next.element.id;
+  if (prevIsEditing !== nextIsEditing) return false;
+  if (prev.element.type === "frame" && prev.dropTargetFrameId !== next.dropTargetFrameId) return false;
+  if (prev.element.type === "connector") {
+    if (prev.elementsById !== next.elementsById) return false;
+    if (prev.dragPositionOverrides !== next.dragPositionOverrides) return false;
+    if (prev.editingConnectorLabel !== next.editingConnectorLabel && prevIsEditing) return false;
+  }
+  return true;
+});
+
 type BoardCanvasProps = {
   camera: { x: number; y: number; scale: number };
   syntheticObjectCount?: number;
   elements?: BoardElement[];
-  activeTool?: string;
   onSelectElement?: (id: string, shiftKey: boolean) => void;
   onDragElementStart?: (id: string) => void;
   onDragElementMove?: (id: string, x: number, y: number) => void;
@@ -45,8 +263,6 @@ type BoardCanvasProps = {
   onLineEndpointDragEnd?: (id: string, endpointIndex: number, worldX: number, worldY: number) => void;
   onConnectorEndpointDrag?: (id: string, endpoint: "from" | "to", worldX: number, worldY: number) => void;
   onConnectorEndpointDragEnd?: (id: string, endpoint: "from" | "to", worldX: number, worldY: number) => void;
-  onConnectorMidpointDrag?: (id: string, segmentIndex: number, worldX: number, worldY: number) => void;
-  onConnectorMidpointDragEnd?: (id: string, segmentIndex: number, worldX: number, worldY: number) => void;
   onConnectorLabelClick?: (id: string) => void;
   onStagePointerDown?: (worldX: number, worldY: number) => void;
   onStagePointerMove?: (worldX: number, worldY: number) => void;
@@ -59,13 +275,13 @@ type BoardCanvasProps = {
   connectorSnapTarget?: { x: number; y: number } | null;
   getFrameChildIdsFn?: (frameId: string) => string[];
   onStageRef?: (stage: Konva.Stage | null) => void;
+  spatialIndex?: SpatialIndex;
 };
 
-export function BoardCanvas({
+export const BoardCanvas = memo(function BoardCanvas({
   camera,
   syntheticObjectCount = 0,
   elements = [],
-  activeTool = "pointer",
   onSelectElement,
   onDragElementStart,
   onDragElementMove,
@@ -81,8 +297,6 @@ export function BoardCanvas({
   onLineEndpointDragEnd,
   onConnectorEndpointDrag,
   onConnectorEndpointDragEnd,
-  onConnectorMidpointDrag,
-  onConnectorMidpointDragEnd,
   onConnectorLabelClick,
   onStagePointerDown,
   onStagePointerMove,
@@ -94,18 +308,32 @@ export function BoardCanvas({
   connectorSnapTarget = null,
   getFrameChildIdsFn,
   onStageRef,
+  spatialIndex,
 }: BoardCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const localStageRef = useRef<Konva.Stage | null>(null);
   const stageCallbackRef = useCallback(
-    (node: Konva.Stage | null) => { onStageRef?.(node); },
+    (node: Konva.Stage | null) => {
+      localStageRef.current = node;
+      onStageRef?.(node);
+    },
     [onStageRef],
   );
   const [size, setSize] = useState({ width: 0, height: 0 });
+  const pendingDragRef = useRef<{
+    id: string;
+    screenX: number;
+    screenY: number;
+    ready: boolean;
+  } | null>(null);
+  const DRAG_THRESHOLD_PX = 4;
 
   const selectedElementIds = useCanvasStore((s) => s.selectedElementIds);
   const groupDrag = useCanvasStore((s) => s.groupDrag);
   const dropTargetFrameId = useCanvasStore((s) => s.dropTargetFrameId);
   const setDropTargetFrameId = useCanvasStore((s) => s.setDropTargetFrameId);
+  const storeZoomScale = useCanvasStore((s) => s.zoomScale);
+  const activeTool = useCanvasStore((s) => s.activeTool);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -191,7 +419,8 @@ export function BoardCanvas({
     }
 
     const visibleNonFrames = nonFrames.filter((el) => !hiddenIds.has(el.id));
-    return [...frames, ...visibleNonFrames, ...connectors];
+    const visibleConnectors = connectors.filter((el) => !hiddenIds.has(el.id));
+    return [...frames, ...visibleNonFrames, ...visibleConnectors];
   }, [elements, frameChildIdsByFrame]);
 
   const viewportBounds = useMemo(() => {
@@ -206,9 +435,11 @@ export function BoardCanvas({
     };
   }, [camera.scale, camera.x, camera.y, size.width, size.height]);
 
-  const visibleElements = useMemo(() => {
+  // Viewport-culled elements (independent of selection so it doesn't recompute
+  // on every selection change). Selected off-screen elements are added in the
+  // staticElements/activeElements split below.
+  const viewportCulled = useMemo(() => {
     return sortedElements.filter((el) => {
-      if (selectedElementIds.has(el.id)) return true;
       const minX = el.x;
       const minY = el.y;
       const maxX = el.x + el.width;
@@ -220,10 +451,82 @@ export function BoardCanvas({
         minY <= viewportBounds.maxY
       );
     });
-  }, [sortedElements, selectedElementIds, viewportBounds]);
+  }, [sortedElements, viewportBounds]);
 
   const isPointerMode = activeTool === "pointer";
   const draggable = isPointerMode;
+
+  const { staticElements, activeElements } = useMemo(() => {
+    const staticEls: BoardElement[] = [];
+    const activeEls: BoardElement[] = [];
+
+    // Build the effective visible set: viewport-culled + selected (always visible)
+    const culledIds = new Set(viewportCulled.map((e) => e.id));
+    const visibleIds = new Set(culledIds);
+    for (const sid of selectedElementIds) visibleIds.add(sid);
+
+    // Child IDs of selected frames — these must render in the active layer on top of the frame.
+    // Skip children of hidden frames so content stays hidden when the frame is selected.
+    const childIdsOfSelectedFrames = new Set<string>();
+    for (const fid of selectedElementIds) {
+      const frame = elementsById.get(fid) as FrameElement | undefined;
+      if (frame?.type === "frame" && frame.hidden) continue;
+      for (const cid of frameChildIdsByFrame.get(fid) ?? []) {
+        childIdsOfSelectedFrames.add(cid);
+        visibleIds.add(cid);
+      }
+    }
+
+    if (editingElementId) visibleIds.add(editingElementId);
+
+    // Walk sorted elements in z-order, only including those that are visible
+    const activeIdSet = new Set<string>();
+    for (const sid of selectedElementIds) activeIdSet.add(sid);
+    if (editingElementId) activeIdSet.add(editingElementId);
+    for (const cid of childIdsOfSelectedFrames) activeIdSet.add(cid);
+
+    // Static: visible elements that are NOT active
+    for (const el of sortedElements) {
+      if (!visibleIds.has(el.id)) continue;
+      if (!activeIdSet.has(el.id)) staticEls.push(el);
+    }
+
+    // Active: selected frames first (each followed by its children), then other active elements
+    const added = new Set<string>();
+    for (const el of sortedElements) {
+      if (!visibleIds.has(el.id)) continue;
+      if (el.type === "frame" && selectedElementIds.has(el.id)) {
+        activeEls.push(el);
+        added.add(el.id);
+        if (!(el as FrameElement).hidden) {
+          for (const cid of frameChildIdsByFrame.get(el.id) ?? []) {
+            if (visibleIds.has(cid) && !added.has(cid)) {
+              const child = elementsById.get(cid);
+              if (child) {
+                activeEls.push(child);
+                added.add(cid);
+              }
+            }
+          }
+        }
+      }
+    }
+    for (const el of sortedElements) {
+      if (!visibleIds.has(el.id)) continue;
+      if (activeIdSet.has(el.id) && !added.has(el.id)) {
+        activeEls.push(el);
+      }
+    }
+    return { staticElements: staticEls, activeElements: activeEls };
+  }, [sortedElements, viewportCulled, selectedElementIds, editingElementId, frameChildIdsByFrame, elementsById]);
+
+  useEffect(() => {
+    const pending = pendingDragRef.current;
+    if (!pending || pending.ready) return;
+    const isInActive = activeElements.some((el) => el.id === pending.id);
+    if (!isInActive) return;
+    pending.ready = true;
+  }, [activeElements]);
 
   // Store callback props in refs so useCallback wrappers remain stable
   const onSelectElementRef = useRef(onSelectElement);
@@ -291,12 +594,81 @@ export function BoardCanvas({
     return frameChildIdsByFrameRef.current.get(frameId) ?? [];
   }, []);
 
-  const handleDragPositionUpdate = useCallback((x: number, y: number, elWidth: number, elHeight: number) => {
-    const cx = x + elWidth / 2;
-    const cy = y + elHeight / 2;
+  const [singleDragOverride, setSingleDragOverride] = useState<{ id: string; x: number; y: number } | null>(null);
+
+  const dragPositionOverrides = useMemo(() => {
+    const hasSingle = !!singleDragOverride;
+    const hasGroup = !!groupDrag && (groupDrag.dx !== 0 || groupDrag.dy !== 0);
+    if (!hasSingle && !hasGroup) return undefined;
+
+    const overrides = new Map<string, { x: number; y: number }>();
+
+    if (singleDragOverride) {
+      overrides.set(singleDragOverride.id, { x: singleDragOverride.x, y: singleDragOverride.y });
+    }
+
+    if (hasGroup && groupDrag) {
+      for (const el of elements) {
+        if (overrides.has(el.id)) continue;
+        if (selectedElementIds.has(el.id) || groupDrag.childIds.has(el.id)) {
+          overrides.set(el.id, { x: el.x + groupDrag.dx, y: el.y + groupDrag.dy });
+        }
+      }
+    }
+
+    return overrides;
+  }, [singleDragOverride, groupDrag, elements, selectedElementIds]);
+
+  const handleDragPositionUpdate = useCallback((id: string, x: number, y: number, width: number, height: number) => {
+    const cx = x + width / 2;
+    const cy = y + height / 2;
     const target = findFrameAtPoint(cx, cy, frameElementsRef.current);
     setDropTargetFrameId(target);
+    setSingleDragOverride({ id, x, y });
   }, [setDropTargetFrameId]);
+
+  const handleDragEnd = useCallback((draggedId: string, newX: number, newY: number) => {
+    setSingleDragOverride({ id: draggedId, x: newX, y: newY });
+    handleMultiDragEnd(draggedId, newX, newY);
+  }, [handleMultiDragEnd]);
+
+  useEffect(() => {
+    if (!singleDragOverride) return;
+    const el = elementsById.get(singleDragOverride.id);
+    if (!el) return;
+    const dx = Math.abs(el.x - singleDragOverride.x);
+    const dy = Math.abs(el.y - singleDragOverride.y);
+    if (dx < 1 && dy < 1) {
+      setSingleDragOverride(null);
+    }
+  }, [singleDragOverride, elementsById]);
+
+  const onLineEndpointDragRef = useRef(onLineEndpointDrag);
+  onLineEndpointDragRef.current = onLineEndpointDrag;
+  const onLineEndpointDragEndRef = useRef(onLineEndpointDragEnd);
+  onLineEndpointDragEndRef.current = onLineEndpointDragEnd;
+  const onConnectorEndpointDragRef = useRef(onConnectorEndpointDrag);
+  onConnectorEndpointDragRef.current = onConnectorEndpointDrag;
+  const onConnectorEndpointDragEndRef = useRef(onConnectorEndpointDragEnd);
+  onConnectorEndpointDragEndRef.current = onConnectorEndpointDragEnd;
+  const onConnectorLabelClickRef = useRef(onConnectorLabelClick);
+  onConnectorLabelClickRef.current = onConnectorLabelClick;
+
+  const handleLineEndpointDrag = useCallback((idx: number, wx: number, wy: number, elementId: string) => {
+    onLineEndpointDragRef.current?.(elementId, idx, wx, wy);
+  }, []);
+  const handleLineEndpointDragEnd = useCallback((idx: number, wx: number, wy: number, elementId: string) => {
+    onLineEndpointDragEndRef.current?.(elementId, idx, wx, wy);
+  }, []);
+  const handleConnectorEndpointDrag = useCallback((endpoint: "from" | "to", wx: number, wy: number, elementId: string) => {
+    onConnectorEndpointDragRef.current?.(elementId, endpoint, wx, wy);
+  }, []);
+  const handleConnectorEndpointDragEnd = useCallback((endpoint: "from" | "to", wx: number, wy: number, elementId: string) => {
+    onConnectorEndpointDragEndRef.current?.(elementId, endpoint, wx, wy);
+  }, []);
+  const handleConnectorLabelClick = useCallback((elementId: string) => {
+    onConnectorLabelClickRef.current?.(elementId);
+  }, []);
 
   const onStagePointerDownRef = useRef(onStagePointerDown);
   onStagePointerDownRef.current = onStagePointerDown;
@@ -309,16 +681,53 @@ export function BoardCanvas({
   const isPointerModeRef = useRef(isPointerMode);
   isPointerModeRef.current = isPointerMode;
 
+  const spatialIndexRef = useRef(spatialIndex);
+  spatialIndexRef.current = spatialIndex;
+  const sortedElementsRef = useRef(sortedElements);
+  sortedElementsRef.current = sortedElements;
+
   const handleStagePointerDown = useCallback((e: Konva.KonvaEventObject<PointerEvent>) => {
     if (!isPointerModeRef.current) return;
     const stage = e.target.getStage();
     if (!stage) return;
-    if (e.target === stage) {
+
+    const clickedStageOrStaticLayer = e.target === stage || e.target.getLayer()?.listening() === false;
+    if (clickedStageOrStaticLayer) {
       const pos = stage.getPointerPosition();
       if (!pos) return;
       const cam = cameraRef.current;
       const worldX = (pos.x - cam.x) / cam.scale;
       const worldY = (pos.y - cam.y) / cam.scale;
+
+      const idx = spatialIndexRef.current;
+      if (idx) {
+        const hits = idx.queryPointHit(worldX, worldY);
+        if (hits.length > 0) {
+          const sorted = sortedElementsRef.current;
+          let topHit = hits[0];
+          let topZIndex = -1;
+          for (const hit of hits) {
+            const zIdx = sorted.findIndex((el) => el.id === hit.id);
+            if (zIdx > topZIndex) {
+              topZIndex = zIdx;
+              topHit = hit;
+            }
+          }
+          const shiftKey = e.evt?.shiftKey ?? false;
+          onSelectElementRef.current?.(topHit.id, shiftKey);
+          if (!shiftKey) {
+            pendingDragRef.current = {
+              id: topHit.id,
+              screenX: pos.x,
+              screenY: pos.y,
+              ready: false,
+            };
+            useCanvasStore.getState().setIsDraggingElement(true);
+          }
+          return;
+        }
+      }
+
       onStagePointerDownRef.current?.(worldX, worldY);
     }
   }, []);
@@ -329,6 +738,21 @@ export function BoardCanvas({
     if (!stage) return;
     const pos = stage.getPointerPosition();
     if (!pos) return;
+
+    const pending = pendingDragRef.current;
+    if (pending && pending.ready) {
+      const dx = pos.x - pending.screenX;
+      const dy = pos.y - pending.screenY;
+      if (dx * dx + dy * dy > DRAG_THRESHOLD_PX * DRAG_THRESHOLD_PX) {
+        pendingDragRef.current = null;
+        const node = stage.findOne(`#element-${pending.id}`);
+        if (node) {
+          node.startDrag();
+          return;
+        }
+      }
+    }
+
     const cam = cameraRef.current;
     const worldX = (pos.x - cam.x) / cam.scale;
     const worldY = (pos.y - cam.y) / cam.scale;
@@ -336,6 +760,10 @@ export function BoardCanvas({
   }, []);
 
   const handleStagePointerUp = useCallback(() => {
+    if (pendingDragRef.current) {
+      pendingDragRef.current = null;
+      useCanvasStore.getState().setIsDraggingElement(false);
+    }
     if (!isPointerModeRef.current) return;
     onStagePointerUpRef.current?.();
   }, []);
@@ -377,114 +805,56 @@ export function BoardCanvas({
               })}
             </Layer>
           )}
+          {/* Static layer: non-selected elements, listening disabled for perf.
+             Click-to-select is handled via spatial index in handleStagePointerDown. */}
+          <Layer listening={false}>
+            {staticElements.map((el) => (
+              <StaticElementNode
+                key={el.id}
+                element={el}
+                onSelect={handleSelect}
+                onDragEnd={handleMultiDragEnd}
+                dropTargetFrameId={dropTargetFrameId}
+                elementsById={elementsById}
+                dragPositionOverrides={dragPositionOverrides}
+              />
+            ))}
+          </Layer>
+
+          {/* Active layer: selected/editing elements with full interactivity */}
           <Layer>
-            {/* Real board elements (frames first, then connectors, then non-frames; hidden children filtered out) */}
-            {visibleElements.map((el) => {
-              const isLine = el.type === "line";
-              const isConnector = el.type === "connector";
-              const isFrame = el.type === "frame";
-              const resizable = !isLine && !isConnector;
-              const editable = el.type === "sticky-note" || el.type === "text" || isFrame;
+            {activeElements.map((el) => {
               const isSelected = selectedElementIds.has(el.id);
               return (
-                <InteractiveShape
+                <ActiveElementNode
                   key={el.id}
                   element={el}
                   isSelected={isSelected}
                   multiSelected={isSelected && isMultiSelect}
-                  draggable={draggable && !isConnector}
+                  draggable={draggable}
                   onSelect={handleSelect}
                   onDragStart={onDragElementStart}
                   onDragMove={onDragElementMove}
-                  onDragEnd={handleMultiDragEnd}
+                  onDragEnd={handleDragEnd}
                   onGroupDragStart={handleGroupDragStart}
                   onGroupDragMove={handleGroupDragMove}
-                  resizable={resizable}
-                  onResize={resizable ? handleResize : undefined}
-                  onRotate={resizable ? handleRotate : undefined}
-                  onRotateCursorChange={resizable ? onRotateCursorChange : undefined}
-                  zoomScale={camera.scale}
-                  onDblClick={editable ? handleDblClick : undefined}
-                  hideSelectionOutline={isLine || isConnector}
-                  getDragChildIds={
-                    el.type === "frame"
-                      ? () => handleGetDragChildIds(el.id)
-                      : undefined
-                  }
-                  onDragPositionUpdate={
-                    !isFrame
-                      ? (x, y) => handleDragPositionUpdate(x, y, el.width, el.height)
-                      : undefined
-                  }
-                >
-                  {el.type === "sticky-note" && (
-                    <StickyNote element={el} isEditing={el.id === editingElementId} />
-                  )}
-                  {el.type === "rectangle" && <RectangleContent element={el} />}
-                  {el.type === "circle" && <CircleContent element={el} />}
-                  {el.type === "line" && <LineContent element={el} />}
-                  {el.type === "text" && (
-                    <TextContent element={el} isEditing={el.id === editingElementId} />
-                  )}
-                  {el.type === "frame" && (
-                    <FrameContent
-                      element={el}
-                      isEditing={el.id === editingElementId}
-                      isDropTarget={dropTargetFrameId === el.id}
-                    />
-                  )}
-                  {isConnector && el.type === "connector" && (
-                    <ConnectorContent
-                      element={el}
-                      elements={elements}
-                      elementsById={elementsById}
-                      isLabelEditing={editingConnectorLabel && el.id === editingElementId}
-                      onLabelClick={
-                        isSelected && el.labelText.trim() !== ""
-                          ? () => onConnectorLabelClick?.(el.id)
-                          : undefined
-                      }
-                    />
-                  )}
-                  {isLine && isSelected && el.type === "line" && (
-                    <LineEndpointHandles
-                      points={el.points}
-                      zoomScale={camera.scale}
-                      onEndpointDrag={(idx, wx, wy) =>
-                        onLineEndpointDrag?.(el.id, idx, wx, wy)
-                      }
-                      onEndpointDragEnd={(idx, wx, wy) =>
-                        onLineEndpointDragEnd?.(el.id, idx, wx, wy)
-                      }
-                    />
-                  )}
-                  {isConnector && isSelected && el.type === "connector" && (
-                    <>
-                      <ConnectorEndpointHandles
-                        element={el}
-                        elements={elements}
-                        zoomScale={camera.scale}
-                        onEndpointDrag={(endpoint, wx, wy) =>
-                          onConnectorEndpointDrag?.(el.id, endpoint, wx, wy)
-                        }
-                        onEndpointDragEnd={(endpoint, wx, wy) =>
-                          onConnectorEndpointDragEnd?.(el.id, endpoint, wx, wy)
-                        }
-                      />
-                      <ConnectorMidpointHandles
-                        element={el}
-                        elements={elements}
-                        zoomScale={camera.scale}
-                        onMidpointDrag={(segIdx, wx, wy) =>
-                          onConnectorMidpointDrag?.(el.id, segIdx, wx, wy)
-                        }
-                        onMidpointDragEnd={(segIdx, wx, wy) =>
-                          onConnectorMidpointDragEnd?.(el.id, segIdx, wx, wy)
-                        }
-                      />
-                    </>
-                  )}
-                </InteractiveShape>
+                  onResize={handleResize}
+                  onRotate={handleRotate}
+                  onRotateCursorChange={onRotateCursorChange}
+                  onDblClick={handleDblClick}
+                  getDragChildIds={handleGetDragChildIds}
+                  onDragPositionUpdate={handleDragPositionUpdate}
+                  editingElementId={editingElementId}
+                  editingConnectorLabel={editingConnectorLabel}
+                  dropTargetFrameId={dropTargetFrameId}
+                  elementsById={elementsById}
+                  dragPositionOverrides={dragPositionOverrides}
+                  onLineEndpointDrag={handleLineEndpointDrag}
+                  onLineEndpointDragEnd={handleLineEndpointDragEnd}
+                  onConnectorEndpointDrag={handleConnectorEndpointDrag}
+                  onConnectorEndpointDragEnd={handleConnectorEndpointDragEnd}
+                  onConnectorLabelClick={handleConnectorLabelClick}
+                />
               );
             })}
 
@@ -496,9 +866,9 @@ export function BoardCanvas({
                 width={groupBounds.width}
                 height={groupBounds.height}
                 stroke="#60a5fa"
-                strokeWidth={2 / camera.scale}
-                cornerRadius={6 / camera.scale}
-                dash={[6 / camera.scale, 3 / camera.scale]}
+                strokeWidth={2 / storeZoomScale}
+                cornerRadius={6 / storeZoomScale}
+                dash={[6 / storeZoomScale, 3 / storeZoomScale]}
                 listening={false}
               />
             )}
@@ -509,10 +879,10 @@ export function BoardCanvas({
                 key={`snap-anchor-${i}`}
                 x={anchor.x}
                 y={anchor.y}
-                radius={7 / camera.scale}
+                radius={7 / storeZoomScale}
                 fill="white"
                 stroke="#60a5fa"
-                strokeWidth={2 / camera.scale}
+                strokeWidth={2 / storeZoomScale}
                 opacity={1}
                 listening={false}
               />
@@ -523,10 +893,10 @@ export function BoardCanvas({
               <KonvaCircle
                 x={connectorSnapTarget.x}
                 y={connectorSnapTarget.y}
-                radius={10 / camera.scale}
+                radius={10 / storeZoomScale}
                 fill="rgba(96, 165, 250, 0.4)"
                 stroke="#2563eb"
-                strokeWidth={2.5 / camera.scale}
+                strokeWidth={2.5 / storeZoomScale}
                 listening={false}
               />
             )}
@@ -540,8 +910,8 @@ export function BoardCanvas({
                 height={marqueeRect.height}
                 fill="rgba(96, 165, 250, 0.1)"
                 stroke="#60a5fa"
-                strokeWidth={1 / camera.scale}
-                dash={[6 / camera.scale, 3 / camera.scale]}
+                strokeWidth={1 / storeZoomScale}
+                dash={[6 / storeZoomScale, 3 / storeZoomScale]}
                 listening={false}
               />
             )}
@@ -550,4 +920,4 @@ export function BoardCanvas({
       )}
     </div>
   );
-}
+});

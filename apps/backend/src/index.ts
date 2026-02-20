@@ -1,3 +1,5 @@
+import "./instrumentation";
+
 import { cors } from "@elysiajs/cors";
 import { Elysia } from "elysia";
 

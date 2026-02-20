@@ -2,7 +2,7 @@
 
 import { useHotkey } from "@tanstack/react-hotkeys";
 import type Konva from "konva";
-import { ArrowLeft, Keyboard } from "lucide-react";
+import { ArrowLeft, Check, Keyboard, Share2 } from "lucide-react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
@@ -10,9 +10,11 @@ import type { PointerEvent as ReactPointerEvent, WheelEvent as ReactWheelEvent }
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as Y from "yjs";
 
+import { AiChatPanel } from "@/components/board/ai-chat-panel";
 import { SelectionToolbar } from "@/components/board/selection-toolbar";
-import { Toolbar, type ActiveTool } from "@/components/board/toolbar";
-import { computePath, findNearbyAnchors, findSnapTarget, getPathMidpoint, isOrthogonalHorizontalFirst, resolveEndpoints, type Point } from "@/components/canvas/connector-utils";
+import { Toolbar } from "@/components/board/toolbar";
+import { measureLabelWidth } from "@/components/canvas/connector-element";
+import { computePath, findNearbyAnchors, findSnapTarget, getConnectorPathAABB, getPathMidpoint, resolveEndpoints, type Point } from "@/components/canvas/connector-utils";
 import {
   createBoxFromDrag,
   MIN_ELEMENT_SIZE,
@@ -34,8 +36,9 @@ import { authClient } from "@/lib/auth-client";
 import { createCollabConnection, type Camera, type ConnectionState } from "@/lib/collab";
 import { deserializeElement, findFrameAtPoint, getBoundingBox, serializeElement } from "@/lib/element-utils";
 import { createPerfProbeCollector } from "@/lib/perf-probe";
+import { SpatialIndex } from "@/lib/spatial-index";
 import { useCanvasStore } from "@/stores/canvas-store";
-import type { BoardElement, FrameElement, PresenceState, PresenceUser } from "@collab/shared/collab";
+import type { AiChatResponse, BoardElement, FrameElement, PresenceState, PresenceUser } from "@collab/shared/collab";
 import {
   DEFAULT_CONNECTOR_STROKE,
   DEFAULT_CONNECTOR_STROKE_WIDTH,
@@ -172,6 +175,7 @@ export default function CanvasPage() {
       grid.style.backgroundPosition = `${cam.x}px ${cam.y}px`;
       grid.style.backgroundSize = `${24 * cam.scale}px ${24 * cam.scale}px`;
     }
+    useCanvasStore.getState().setZoomScale(cam.scale);
   }, []);
   const [remoteCursors, setRemoteCursors] = useState<RemoteCursor[]>([]);
   const [onlineUsers, setOnlineUsers] = useState<PresenceUser[]>([]);
@@ -180,14 +184,16 @@ export default function CanvasPage() {
   const [isPanning, setIsPanning] = useState(false);
   const [isSpacebarPressed, setIsSpacebarPressed] = useState(false);
   const [syntheticObjectCount, setSyntheticObjectCount] = useState(0);
-  const [activeTool, setActiveTool] = useState<ActiveTool>("pointer");
+  const activeTool = useCanvasStore((s) => s.activeTool);
+  const setActiveTool = useCanvasStore((s) => s.setActiveTool);
   const selectedElementIds = useCanvasStore((s) => s.selectedElementIds);
   const selectElement = useCanvasStore((s) => s.selectElement);
   const setSelectedElementIds = useCanvasStore((s) => s.setSelectedElementIds);
   const clearSelection = useCanvasStore((s) => s.clearSelection);
   const [editingElementId, setEditingElementId] = useState<string | null>(null);
   const [editingConnectorLabel, setEditingConnectorLabel] = useState(false);
-  const [isDraggingElement, setIsDraggingElement] = useState(false);
+  const isDraggingElement = useCanvasStore((s) => s.isDraggingElement);
+  const setIsDraggingElement = useCanvasStore((s) => s.setIsDraggingElement);
   const [editText, setEditText] = useState("");
   const surfaceRef = useRef<HTMLDivElement | null>(null);
   const panStartRef = useRef<{ x: number; y: number } | null>(null);
@@ -204,9 +210,12 @@ export default function CanvasPage() {
   const pointerPositionRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
   const [connectorSnapAnchors, setConnectorSnapAnchors] = useState<Point[]>([]);
   const [connectorSnapTarget, setConnectorSnapTarget] = useState<Point | null>(null);
+  const cameraSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingDragMoveRef = useRef<{ id: string; x: number; y: number } | null>(null);
   const pendingGroupDragMoveRef = useRef<{ dx: number; dy: number } | null>(null);
   const groupDragOriginsRef = useRef<Map<string, { x: number; y: number }> | null>(null);
+  const groupDragConnectorOriginsRef = useRef<Map<string, { fromX: number; fromY: number; toX: number; toY: number }> | null>(null);
+  const groupDragNeedsOriginsRef = useRef(false);
   const pendingResizeRef = useRef<{ id: string; box: ElementBox } | null>(null);
   const pendingRotateRef = useRef<{ id: string; rotation: number } | null>(null);
   const pendingLiveEditTextRef = useRef<string | null>(null);
@@ -220,6 +229,12 @@ export default function CanvasPage() {
   const perfElementIdRef = useRef<string | null>(null);
   const konvaStageRef = useRef<Konva.Stage | null>(null);
   const [isDrawing, setIsDrawing] = useState(false);
+  const [aiChatOpen, setAiChatOpen] = useState(false);
+  const [shareCopied, setShareCopied] = useState(false);
+  const aiChatHandlerRef = useRef<((response: AiChatResponse) => void) | null>(null);
+  const panToCreatedElementsRef = useRef<((ids: string[]) => void) | null>(null);
+  const snapCalcRafRef = useRef<number | null>(null);
+  const pendingSnapWorldRef = useRef<{ x: number; y: number; excludeIds: Set<string> } | null>(null);
 
   const handleStageRef = useCallback((stage: Konva.Stage | null) => {
     konvaStageRef.current = stage;
@@ -290,7 +305,13 @@ export default function CanvasPage() {
       onPerfProbe(probe) {
         if (!perfEnabled) return;
         perfCollectorRef.current.recordProbe(probe.kind, probe.latencyMs);
-      }
+      },
+      onAiResponse(response) {
+        aiChatHandlerRef.current?.(response);
+        if (response.createdElementIds?.length) {
+          panToCreatedElementsRef.current?.(response.createdElementIds);
+        }
+      },
     });
 
     connectionRef.current = connection;
@@ -304,9 +325,40 @@ export default function CanvasPage() {
     };
   }, [currentUser, roomId, perfEnabled]);
 
-  const elements = useYjsElements(yjsDoc);
+  const rawElements = useYjsElements(yjsDoc);
+
+  const elements = useMemo(() => {
+    return rawElements.map((el) => {
+      if (el.type !== "connector" || (!el.fromId && !el.toId)) return el;
+      const { from, to } = resolveEndpoints(el, rawElements);
+      const x = Math.min(from.x, to.x);
+      const y = Math.min(from.y, to.y);
+      const width = Math.max(Math.abs(to.x - from.x), 1);
+      const height = Math.max(Math.abs(to.y - from.y), 1);
+      if (x === el.x && y === el.y && width === el.width && height === el.height) return el;
+      return { ...el, x, y, width, height };
+    });
+  }, [rawElements]);
+
   const elementsRef = useRef(elements);
   elementsRef.current = elements;
+
+  const spatialIndexRef = useRef(new SpatialIndex());
+  useEffect(() => {
+    const elementsById = new Map(elements.map((e) => [e.id, e]));
+    const getAABB = (el: BoardElement) => {
+      if (el.type === "connector") {
+        return getConnectorPathAABB(el, elementsById);
+      }
+      return {
+        minX: el.x,
+        minY: el.y,
+        maxX: el.x + el.width,
+        maxY: el.y + el.height,
+      };
+    };
+    spatialIndexRef.current.sync(elements, getAABB);
+  }, [elements]);
 
   useEffect(() => {
     if (!perfEnabled) return;
@@ -648,7 +700,7 @@ export default function CanvasPage() {
       elementMap.set("fromY", worldY);
       elementMap.set("toX", worldX);
       elementMap.set("toY", worldY);
-      elementMap.set("routingStyle", "orthogonal");
+      elementMap.set("routingStyle", "curved");
       elementMap.set("startArrow", "none");
       elementMap.set("endArrow", "none");
       elementMap.set("stroke", DEFAULT_CONNECTOR_STROKE);
@@ -710,7 +762,7 @@ export default function CanvasPage() {
       if (!elementMap) return;
 
       const excludeIds = new Set([id]);
-      const snap = findSnapTarget({ x: worldX, y: worldY }, elements, excludeIds);
+      const snap = findSnapTarget({ x: worldX, y: worldY }, elements, excludeIds, spatialIndexRef.current);
 
       const xKey = endpoint === "from" ? "fromX" : "toX";
       const yKey = endpoint === "from" ? "fromY" : "toY";
@@ -739,27 +791,6 @@ export default function CanvasPage() {
         elementMap.set("y", Math.min(fy, ty));
         elementMap.set("width", Math.max(Math.abs(tx - fx), 1));
         elementMap.set("height", Math.max(Math.abs(ty - fy), 1));
-      });
-    },
-    [elements]
-  );
-
-  const moveConnectorMidpoint = useCallback(
-    (id: string, _segmentIndex: number, worldX: number, worldY: number) => {
-      const doc = docRef.current;
-      if (!doc) return;
-      const elementsMap = doc.getMap("elements");
-      const elementMap = elementsMap.get(id) as Y.Map<unknown> | undefined;
-      if (!elementMap) return;
-
-      const el = elements.find((e) => e.id === id);
-      if (!el || el.type !== "connector") return;
-
-      const resolved = resolveEndpoints(el, elements);
-      const hFirst = isOrthogonalHorizontalFirst(resolved.from, resolved.to, el.fromAnchor, el.toAnchor);
-
-      doc.transact(() => {
-        elementMap.set("elbowMidpoint", hFirst ? worldX : worldY);
       });
     },
     [elements]
@@ -813,6 +844,12 @@ export default function CanvasPage() {
           const cy = (childMap.get("y") as number) ?? 0;
           childMap.set("x", cx + deltaX);
           childMap.set("y", cy + deltaY);
+          if (childMap.get("type") === "connector") {
+            childMap.set("fromX", ((childMap.get("fromX") as number) ?? 0) + deltaX);
+            childMap.set("fromY", ((childMap.get("fromY") as number) ?? 0) + deltaY);
+            childMap.set("toX", ((childMap.get("toX") as number) ?? 0) + deltaX);
+            childMap.set("toY", ((childMap.get("toY") as number) ?? 0) + deltaY);
+          }
         }
       });
     } else {
@@ -851,6 +888,7 @@ export default function CanvasPage() {
     }
 
     groupDragOriginsRef.current = null;
+    groupDragConnectorOriginsRef.current = null;
     if (groupDragMoveRafRef.current !== null) {
       window.cancelAnimationFrame(groupDragMoveRafRef.current);
       groupDragMoveRafRef.current = null;
@@ -905,8 +943,16 @@ export default function CanvasPage() {
         elementMap.set("x", newX);
         elementMap.set("y", newY);
 
-        // Auto-assign frameId for non-frame elements whose parent frame is not also selected
         const elType = elementMap.get("type") as string | undefined;
+
+        if (elType === "connector") {
+          elementMap.set("fromX", ((elementMap.get("fromX") as number) ?? 0) + deltaX);
+          elementMap.set("fromY", ((elementMap.get("fromY") as number) ?? 0) + deltaY);
+          elementMap.set("toX", ((elementMap.get("toX") as number) ?? 0) + deltaX);
+          elementMap.set("toY", ((elementMap.get("toY") as number) ?? 0) + deltaY);
+        }
+
+        // Auto-assign frameId for non-frame elements whose parent frame is not also selected
         if (elType !== "frame") {
           const currentFrameId = (elementMap.get("frameId") as string) ?? null;
           const parentAlsoMoving = currentFrameId && selectedFrameIds.has(currentFrameId);
@@ -921,6 +967,7 @@ export default function CanvasPage() {
     });
 
     groupDragOriginsRef.current = null;
+    groupDragConnectorOriginsRef.current = null;
     if (groupDragMoveRafRef.current !== null) {
       window.cancelAnimationFrame(groupDragMoveRafRef.current);
       groupDragMoveRafRef.current = null;
@@ -939,7 +986,7 @@ export default function CanvasPage() {
     doc.transact(() => {
       elementMap.set("x", pending.x);
       elementMap.set("y", pending.y);
-    });
+    }, "element-drag-move");
   }, []);
 
   const onDragElementMove = useCallback(
@@ -955,27 +1002,7 @@ export default function CanvasPage() {
   );
 
   const onGroupDragStart = useCallback(() => {
-    const doc = docRef.current;
-    if (!doc) return;
-    const store = useCanvasStore.getState();
-    const gd = store.groupDrag;
-    if (!gd) return;
-
-    const ids = new Set<string>();
-    for (const id of store.selectedElementIds) ids.add(id);
-    for (const id of gd.childIds) ids.add(id);
-
-    const elementsMap = doc.getMap("elements");
-    const origins = new Map<string, { x: number; y: number }>();
-    for (const id of ids) {
-      const elMap = elementsMap.get(id) as Y.Map<unknown> | undefined;
-      if (!elMap) continue;
-      origins.set(id, {
-        x: (elMap.get("x") as number) ?? 0,
-        y: (elMap.get("y") as number) ?? 0,
-      });
-    }
-    groupDragOriginsRef.current = origins;
+    groupDragNeedsOriginsRef.current = true;
   }, []);
 
   const flushPendingGroupDragMove = useCallback(() => {
@@ -984,9 +1011,43 @@ export default function CanvasPage() {
     const pending = pendingGroupDragMoveRef.current;
     if (!pending) return;
     pendingGroupDragMoveRef.current = null;
+
+    if (groupDragNeedsOriginsRef.current) {
+      groupDragNeedsOriginsRef.current = false;
+      const store = useCanvasStore.getState();
+      const gd = store.groupDrag;
+      if (gd) {
+        const ids = new Set<string>();
+        for (const id of store.selectedElementIds) ids.add(id);
+        for (const id of gd.childIds) ids.add(id);
+        const eMap = doc.getMap("elements");
+        const origins = new Map<string, { x: number; y: number }>();
+        const connOrigins = new Map<string, { fromX: number; fromY: number; toX: number; toY: number }>();
+        for (const id of ids) {
+          const elMap = eMap.get(id) as Y.Map<unknown> | undefined;
+          if (!elMap) continue;
+          origins.set(id, {
+            x: (elMap.get("x") as number) ?? 0,
+            y: (elMap.get("y") as number) ?? 0,
+          });
+          if (elMap.get("type") === "connector") {
+            connOrigins.set(id, {
+              fromX: (elMap.get("fromX") as number) ?? 0,
+              fromY: (elMap.get("fromY") as number) ?? 0,
+              toX: (elMap.get("toX") as number) ?? 0,
+              toY: (elMap.get("toY") as number) ?? 0,
+            });
+          }
+        }
+        groupDragOriginsRef.current = origins;
+        groupDragConnectorOriginsRef.current = connOrigins.size > 0 ? connOrigins : null;
+      }
+    }
+
     const origins = groupDragOriginsRef.current;
     if (!origins || origins.size === 0) return;
 
+    const connOrigins = groupDragConnectorOriginsRef.current;
     const elementsMap = doc.getMap("elements");
     doc.transact(() => {
       for (const [id, origin] of origins) {
@@ -994,6 +1055,13 @@ export default function CanvasPage() {
         if (!elMap) continue;
         elMap.set("x", origin.x + pending.dx);
         elMap.set("y", origin.y + pending.dy);
+        const co = connOrigins?.get(id);
+        if (co) {
+          elMap.set("fromX", co.fromX + pending.dx);
+          elMap.set("fromY", co.fromY + pending.dy);
+          elMap.set("toX", co.toX + pending.dx);
+          elMap.set("toY", co.toY + pending.dy);
+        }
       }
     }, "group-drag-move");
   }, []);
@@ -1082,6 +1150,15 @@ export default function CanvasPage() {
       if (remoteCursorRafRef.current !== null) {
         window.cancelAnimationFrame(remoteCursorRafRef.current);
       }
+      if (liveEditRafRef.current !== null) {
+        cancelAnimationFrame(liveEditRafRef.current);
+      }
+      if (snapCalcRafRef.current !== null) {
+        cancelAnimationFrame(snapCalcRafRef.current);
+      }
+      if (cameraSyncTimerRef.current !== null) {
+        clearTimeout(cameraSyncTimerRef.current);
+      }
     };
   }, []);
 
@@ -1163,6 +1240,30 @@ export default function CanvasPage() {
       setSelectedElementIds(next);
     }
   }, [setSelectedElementIds]);
+
+  const dissolveFrame = useCallback((id: string) => {
+    const doc = docRef.current;
+    if (!doc) return;
+    const elementsMap = doc.getMap("elements");
+
+    doc.transact(() => {
+      elementsMap.forEach((val) => {
+        const m = val as Y.Map<unknown>;
+        if (m && typeof m.get === "function" && m.get("frameId") === id) {
+          m.set("frameId", null);
+        }
+      });
+      elementsMap.delete(id);
+    });
+
+    clearSelection();
+  }, [clearSelection]);
+
+  const sendAiMessage = useCallback((prompt: string, conversationHistory?: import("@collab/shared/collab").AiConversationMessage[], selectedElementIds?: string[]): string => {
+    const connection = connectionRef.current;
+    if (!connection) return "";
+    return connection.sendAiMessage(prompt, conversationHistory, selectedElementIds);
+  }, []);
 
   const deleteSelectedElements = useCallback(() => {
     const doc = docRef.current;
@@ -1457,6 +1558,60 @@ export default function CanvasPage() {
     setCameraState(newCam);
   }, [elements, applyCameraDirect, setCameraState]);
 
+  const panToCreatedElements = useCallback((ids: string[]) => {
+    // Defer by a frame so the Yjs sync update has been applied to React state
+    requestAnimationFrame(() => {
+      const surface = surfaceRef.current;
+      const doc = docRef.current;
+      if (!surface || !doc) return;
+
+      const elementsMap = doc.getMap("elements");
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      for (const id of ids) {
+        const m = elementsMap.get(id) as Y.Map<unknown> | undefined;
+        if (!m) continue;
+        const x = m.get("x") as number | undefined;
+        const y = m.get("y") as number | undefined;
+        const w = m.get("width") as number | undefined;
+        const h = m.get("height") as number | undefined;
+        if (x == null || y == null || w == null || h == null) continue;
+        if (x < minX) minX = x;
+        if (y < minY) minY = y;
+        if (x + w > maxX) maxX = x + w;
+        if (y + h > maxY) maxY = y + h;
+      }
+      if (!isFinite(minX)) return;
+
+      const bboxW = maxX - minX;
+      const bboxH = maxY - minY;
+      if (bboxW <= 0 || bboxH <= 0) return;
+
+      const rect = surface.getBoundingClientRect();
+      const padding = 64;
+      const availableWidth = Math.max(1, rect.width - 2 * padding);
+      const availableHeight = Math.max(1, rect.height - 2 * padding);
+      const AI_PAN_ZOOM_DAMPEN = 0.65;
+      const AI_PAN_MAX_SCALE = 1;
+      const scale = clamp(
+        Math.min(availableWidth / bboxW, availableHeight / bboxH) * AI_PAN_ZOOM_DAMPEN,
+        MIN_SCALE,
+        AI_PAN_MAX_SCALE,
+      );
+
+      const centerX = minX + bboxW / 2;
+      const centerY = minY + bboxH / 2;
+      const newCam: Camera = {
+        x: rect.width / 2 - centerX * scale,
+        y: rect.height / 2 - centerY * scale,
+        scale,
+      };
+      applyCameraDirect(newCam);
+      setCameraState(newCam);
+    });
+  }, [applyCameraDirect, setCameraState]);
+
+  panToCreatedElementsRef.current = panToCreatedElements;
+
   const updateElementProperty = useCallback((id: string, key: string, value: unknown) => {
     const doc = docRef.current;
     if (!doc) return;
@@ -1481,9 +1636,17 @@ export default function CanvasPage() {
       } else if (el.type === "frame") {
         setEditingElementId(id);
         setEditText(el.title);
+      } else if (el.type === "connector") {
+        const conn = el as import("@collab/shared/collab").ConnectorElement;
+        setEditingElementId(id);
+        setEditingConnectorLabel(true);
+        setEditText(conn.labelText.trim() === "" ? "" : conn.labelText);
+        if (conn.labelText.trim() === "") {
+          updateElementProperty(id, "labelText", " ");
+        }
       }
     },
-    [elements]
+    [elements, updateElementProperty]
   );
 
   const applyEditingTextToYjs = useCallback(
@@ -1545,6 +1708,14 @@ export default function CanvasPage() {
     setEditText("");
   }, [editingElementId, editText, applyEditingTextToYjs]);
 
+  const handleConnectorLabelBlur = useCallback((e: React.FocusEvent) => {
+    const related = e.relatedTarget as HTMLElement | null;
+    if (related?.closest('[data-radix-popper-content-wrapper]')) {
+      return;
+    }
+    commitEdit();
+  }, [commitEdit]);
+
   useEffect(() => {
     if (editingElementId) return;
     if (liveEditRafRef.current !== null) {
@@ -1554,10 +1725,13 @@ export default function CanvasPage() {
     pendingLiveEditTextRef.current = null;
   }, [editingElementId]);
 
-  // Focus textarea when editing starts
+  // Focus textarea when editing starts, with cursor at end of text
   useEffect(() => {
     if (editingElementId && textareaRef.current) {
-      textareaRef.current.focus();
+      const el = textareaRef.current;
+      el.focus();
+      const len = el.value.length;
+      el.setSelectionRange(len, len);
     }
   }, [editingElementId]);
 
@@ -1578,15 +1752,15 @@ export default function CanvasPage() {
     if (useCanvasStore.getState().selectedElementIds.size > 0) {
       copySelectedElements();
     }
-  });
+  }, { ignoreInputs: true, enabled: !aiChatOpen });
   useHotkey("Mod+V", () => {
     pasteElements();
-  });
+  }, { ignoreInputs: true, enabled: !aiChatOpen });
   useHotkey("Mod+D", () => {
     if (useCanvasStore.getState().selectedElementIds.size > 0) {
       duplicateSelectedElements();
     }
-  });
+  }, { ignoreInputs: true, enabled: !aiChatOpen });
 
   // Escape: commit edit if editing, otherwise clear selection and reset tool
   useHotkey("Escape", () => {
@@ -1612,10 +1786,131 @@ export default function CanvasPage() {
 
   useHotkey("Shift+2", () => zoomToSelection(), { enabled: !editingElementId });
 
+  // Stable callback wrappers for BoardCanvas props (avoid inline arrow functions)
+  const handleDragElementStart = useCallback(() => {
+    setIsDraggingElement(true);
+  }, []);
+
+  const moveElementRef = useRef(moveElement);
+  moveElementRef.current = moveElement;
+  const moveSelectedElementsRef = useRef(moveSelectedElements);
+  moveSelectedElementsRef.current = moveSelectedElements;
+
+  const handleDragElement = useCallback((id: string, x: number, y: number) => {
+    moveElementRef.current(id, x, y);
+    requestAnimationFrame(() => setIsDraggingElement(false));
+  }, []);
+
+  const handleDragSelectedElements = useCallback((deltaX: number, deltaY: number) => {
+    moveSelectedElementsRef.current(deltaX, deltaY);
+    requestAnimationFrame(() => setIsDraggingElement(false));
+  }, []);
+
+  const moveConnectorEndpointRef = useRef(moveConnectorEndpoint);
+  moveConnectorEndpointRef.current = moveConnectorEndpoint;
+  const finalizeConnectorEndpointRef = useRef(finalizeConnectorEndpoint);
+  finalizeConnectorEndpointRef.current = finalizeConnectorEndpoint;
+
+  const handleConnectorEndpointDrag = useCallback(
+    (id: string, endpoint: "from" | "to", wx: number, wy: number) => {
+      moveConnectorEndpointRef.current(id, endpoint, wx, wy);
+      const excludeIds = new Set([id]);
+      const idx = spatialIndexRef.current;
+      const nearby = findNearbyAnchors({ x: wx, y: wy }, elementsRef.current, excludeIds, undefined, idx);
+      setConnectorSnapAnchors(nearby.flatMap((n) => n.anchors));
+      const snap = findSnapTarget({ x: wx, y: wy }, elementsRef.current, excludeIds, idx);
+      setConnectorSnapTarget(snap ? snap.anchor : null);
+    },
+    []
+  );
+
+  const handleConnectorEndpointDragEnd = useCallback(
+    (id: string, endpoint: "from" | "to", wx: number, wy: number) => {
+      finalizeConnectorEndpointRef.current(id, endpoint, wx, wy);
+      setConnectorSnapAnchors([]);
+      setConnectorSnapTarget(null);
+    },
+    []
+  );
+
+  const handleConnectorLabelClick = useCallback(
+    (id: string) => {
+      const el = elementsRef.current.find((e) => e.id === id);
+      if (el?.type === "connector") {
+        setEditingElementId(id);
+        setEditingConnectorLabel(true);
+        setEditText((el as import("@collab/shared/collab").ConnectorElement).labelText.trim());
+      }
+    },
+    []
+  );
+
+  const handleStagePointerDown = useCallback(
+    (worldX: number, worldY: number) => {
+      if (isSpacebarPressedRef.current) return;
+      clearSelection();
+      marqueeStartRef.current = { x: worldX, y: worldY };
+    },
+    [clearSelection]
+  );
+
+  const marqueeRectRef = useRef(marqueeRect);
+  marqueeRectRef.current = marqueeRect;
+
+  const handleStagePointerMove = useCallback(
+    (worldX: number, worldY: number) => {
+      connectionRef.current?.setCursor({ x: worldX, y: worldY });
+      if (marqueeStartRef.current) {
+        const start = marqueeStartRef.current;
+        setMarqueeRect({
+          x: Math.min(start.x, worldX),
+          y: Math.min(start.y, worldY),
+          width: Math.abs(worldX - start.x),
+          height: Math.abs(worldY - start.y),
+        });
+      }
+    },
+    []
+  );
+
+  const handleStagePointerUp = useCallback(
+    () => {
+      const mRect = marqueeRectRef.current;
+      if (mRect && mRect.width > 2 && mRect.height > 2) {
+        const ids = elementsRef.current
+          .filter((el) => {
+            return (
+              el.x < mRect.x + mRect.width &&
+              el.x + el.width > mRect.x &&
+              el.y < mRect.y + mRect.height &&
+              el.y + el.height > mRect.y
+            );
+          })
+          .map((el) => el.id);
+        if (ids.length > 0) {
+          setSelectedElementIds(new Set(ids));
+        }
+      }
+      marqueeStartRef.current = null;
+      setMarqueeRect(null);
+    },
+    [setSelectedElementIds]
+  );
+
   // Spacebar pan (needs keydown + keyup tracking, kept as manual useEffect)
+  // Skip when user is typing in any input/textarea (e.g. AI chat) so spacebar works normally
+  const isTypingInInput = useCallback(() => {
+    const el = document.activeElement;
+    if (!el) return false;
+    const tag = el.tagName.toLowerCase();
+    if (tag === "input" || tag === "textarea") return true;
+    if (el.getAttribute("contenteditable") === "true") return true;
+    return false;
+  }, []);
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === " " && !editingElementId) {
+      if (e.key === " " && !editingElementId && !isTypingInInput()) {
         e.preventDefault();
         isSpacebarPressedRef.current = true;
         setIsSpacebarPressed(true);
@@ -1633,7 +1928,7 @@ export default function CanvasPage() {
       window.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("keyup", handleKeyUp);
     };
-  }, [editingElementId]);
+  }, [editingElementId, isTypingInInput]);
 
   const isSessionReady = !isPending && !!session?.user && !!currentUser;
 
@@ -1721,9 +2016,8 @@ export default function CanvasPage() {
 
     if (activeTool === "connector") {
       const world = toWorld(event);
-      // Snap start point to nearest shape anchor
       const excludeIds = new Set<string>();
-      const snap = findSnapTarget(world, elements, excludeIds);
+      const snap = findSnapTarget(world, elements, excludeIds, spatialIndexRef.current);
       const startPt = snap ? snap.anchor : world;
       const id = createConnectorDraft(startPt.x, startPt.y);
       if (id) {
@@ -1770,10 +2064,20 @@ export default function CanvasPage() {
     if (activeTool === "connector" && !drawingShapeRef.current) {
       const world = toWorld(event);
       const excludeIds = new Set<string>();
-      const nearby = findNearbyAnchors(world, elements, excludeIds);
-      setConnectorSnapAnchors(nearby.flatMap((n) => n.anchors));
-      const snapTarget = findSnapTarget(world, elements, excludeIds);
-      setConnectorSnapTarget(snapTarget ? snapTarget.anchor : null);
+      pendingSnapWorldRef.current = { ...world, excludeIds };
+      if (snapCalcRafRef.current === null) {
+        snapCalcRafRef.current = requestAnimationFrame(() => {
+          snapCalcRafRef.current = null;
+          const pending = pendingSnapWorldRef.current;
+          if (!pending) return;
+          const idx = spatialIndexRef.current;
+          const nearby = findNearbyAnchors(pending, elementsRef.current, pending.excludeIds, undefined, idx);
+          setConnectorSnapAnchors(nearby.flatMap((n) => n.anchors));
+          const snap = findSnapTarget(pending, elementsRef.current, pending.excludeIds, idx);
+          setConnectorSnapTarget(snap ? snap.anchor : null);
+          pendingSnapWorldRef.current = null;
+        });
+      }
     }
 
     if (drawingShapeRef.current) {
@@ -1781,12 +2085,22 @@ export default function CanvasPage() {
       const { id, tool, start } = drawingShapeRef.current;
       if (tool === "connector") {
         moveConnectorEndpoint(id, "to", world.x, world.y);
-        // Show snap preview on target shapes during drag
+        // Show snap preview on target shapes during drag (deferred to RAF)
         const excludeIds = new Set([id]);
-        const nearby = findNearbyAnchors(world, elements, excludeIds);
-        setConnectorSnapAnchors(nearby.flatMap((n) => n.anchors));
-        const snapTarget = findSnapTarget(world, elements, excludeIds);
-        setConnectorSnapTarget(snapTarget ? snapTarget.anchor : null);
+        pendingSnapWorldRef.current = { ...world, excludeIds };
+        if (snapCalcRafRef.current === null) {
+          snapCalcRafRef.current = requestAnimationFrame(() => {
+            snapCalcRafRef.current = null;
+            const pending = pendingSnapWorldRef.current;
+            if (!pending) return;
+            const idx = spatialIndexRef.current;
+            const nearby = findNearbyAnchors(pending, elementsRef.current, pending.excludeIds, undefined, idx);
+            setConnectorSnapAnchors(nearby.flatMap((n) => n.anchors));
+            const snap = findSnapTarget(pending, elementsRef.current, pending.excludeIds, idx);
+            setConnectorSnapTarget(snap ? snap.anchor : null);
+            pendingSnapWorldRef.current = null;
+          });
+        }
       } else if (tool === "line") {
         const doc = docRef.current;
         if (doc) {
@@ -1904,6 +2218,14 @@ export default function CanvasPage() {
     panStartRef.current = null;
   };
 
+  const debouncedSyncCamera = useCallback(() => {
+    if (cameraSyncTimerRef.current) clearTimeout(cameraSyncTimerRef.current);
+    cameraSyncTimerRef.current = setTimeout(() => {
+      cameraSyncTimerRef.current = null;
+      setCameraState(cameraRef.current);
+    }, 150);
+  }, []);
+
   const onWheel = (event: ReactWheelEvent<HTMLDivElement>) => {
     if (perfEnabled) {
       perfCollectorRef.current.markInput();
@@ -1930,7 +2252,7 @@ export default function CanvasPage() {
 
     const newCam = { x: newX, y: newY, scale: nextScale };
     applyCameraDirect(newCam);
-    setCameraState(newCam);
+    debouncedSyncCamera();
   };
 
   // Compute editing element position for text overlay
@@ -1954,7 +2276,7 @@ export default function CanvasPage() {
     ? (() => {
         const conn = editingElement as import("@collab/shared/collab").ConnectorElement;
         const { from, to } = resolveEndpoints(conn, elements);
-        const pathPoints = computePath(from, to, conn.routingStyle, conn.elbowMidpoint, conn.fromAnchor, conn.toAnchor);
+        const pathPoints = computePath(from, to, conn.fromAnchor, conn.toAnchor);
         return getPathMidpoint(pathPoints);
       })()
     : null;
@@ -1975,12 +2297,12 @@ export default function CanvasPage() {
             transformOrigin: "top left" as const,
           }
         : {
-            left: editingElement.x * camera.scale + camera.x,
-            top: editingElement.y * camera.scale + camera.y,
+            left: (editingElement.x + editingElement.width / 2) * camera.scale + camera.x,
+            top: (editingElement.y + editingElement.height / 2) * camera.scale + camera.y,
             width: editingElement.width,
             height: editingElement.height,
-            transform: `scale(${camera.scale})`,
-            transformOrigin: "top left" as const,
+            transform: `rotate(${editingElement.rotation ?? 0}deg) scale(${camera.scale}) translate(-50%, -50%)`,
+            transformOrigin: "0 0" as const,
           }
     : null;
 
@@ -1988,8 +2310,11 @@ export default function CanvasPage() {
     (key: string, value: unknown) => {
       if (!selectedElement) return;
       updateElementProperty(selectedElement.id, key, value);
+      if (editingConnectorLabel && textareaRef.current) {
+        requestAnimationFrame(() => textareaRef.current?.focus());
+      }
     },
-    [selectedElement, updateElementProperty]
+    [selectedElement, updateElementProperty, editingConnectorLabel]
   );
 
   const handleStartEditingConnectorLabel = useCallback(() => {
@@ -2000,13 +2325,12 @@ export default function CanvasPage() {
     setEditText("");
   }, [selectedElement, updateElementProperty]);
 
-  const handleToolChange = useCallback((tool: ActiveTool) => {
-    setActiveTool(tool);
-    if (tool !== "connector") {
+  useEffect(() => {
+    if (activeTool !== "connector") {
       setConnectorSnapAnchors([]);
       setConnectorSnapTarget(null);
     }
-  }, []);
+  }, [activeTool]);
 
   if (!isSessionReady) {
     return <main className="min-h-screen grid place-content-center">Loading session...</main>;
@@ -2036,28 +2360,54 @@ export default function CanvasPage() {
             <span className="text-[#ff9da0] text-xs">disconnected</span>
           ) : null}
         </div>
-        <div className="flex">
-          {onlineUsers.map((user, index) => (
-            <Tooltip key={user.id}>
-              <TooltipTrigger asChild>
-                <Avatar
-                  size="sm"
-                  className="border-2 border-[#1a1a1a] cursor-default"
-                  style={{ zIndex: onlineUsers.length - index }}
-                >
-                  <AvatarFallback
-                    className="text-[10px] font-medium text-white"
-                    style={{ backgroundColor: user.color }}
+        <div className="flex items-center gap-2">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-8 gap-1.5"
+                onClick={async () => {
+                  await navigator.clipboard.writeText(typeof window !== "undefined" ? window.location.href : "");
+                  setShareCopied(true);
+                  setTimeout(() => setShareCopied(false), 2000);
+                }}
+              >
+                {shareCopied ? (
+                  <Check className="h-4 w-4 text-green-500 animate-in fade-in zoom-in duration-200 shrink-0" />
+                ) : (
+                  <Share2 className="h-4 w-4 shrink-0" />
+                )}
+                {shareCopied ? "Copied!" : "Share"}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom" sideOffset={4}>
+              {shareCopied ? "Copied!" : "Copy share link"}
+            </TooltipContent>
+          </Tooltip>
+          <div className="flex">
+            {onlineUsers.map((user, index) => (
+              <Tooltip key={user.id}>
+                <TooltipTrigger asChild>
+                  <Avatar
+                    size="sm"
+                    className="border-2 border-[#1a1a1a] cursor-default"
+                    style={{ zIndex: onlineUsers.length - index }}
                   >
-                    {user.name.charAt(0).toUpperCase()}
-                  </AvatarFallback>
-                </Avatar>
-              </TooltipTrigger>
-              <TooltipContent side="bottom" sideOffset={4}>
-                {user.name}
-              </TooltipContent>
-            </Tooltip>
-          ))}
+                    <AvatarFallback
+                      className="text-[10px] font-medium text-white"
+                      style={{ backgroundColor: user.color }}
+                    >
+                      {user.name.charAt(0).toUpperCase()}
+                    </AvatarFallback>
+                  </Avatar>
+                </TooltipTrigger>
+                <TooltipContent side="bottom" sideOffset={4}>
+                  {user.name}
+                </TooltipContent>
+              </Tooltip>
+            ))}
+          </div>
         </div>
       </header>
 
@@ -2093,14 +2443,13 @@ export default function CanvasPage() {
           camera={camera}
           syntheticObjectCount={syntheticObjectCount}
           elements={elements}
-          activeTool={activeTool}
           getFrameChildIdsFn={getFrameChildIdsFromYjs}
           onStageRef={handleStageRef}
           onSelectElement={selectElement}
-          onDragElementStart={() => setIsDraggingElement(true)}
+          onDragElementStart={handleDragElementStart}
           onDragElementMove={onDragElementMove}
-          onDragElement={(...args) => { setIsDraggingElement(false); moveElement(...args); }}
-          onDragSelectedElements={(...args) => { setIsDraggingElement(false); moveSelectedElements(...args); }}
+          onDragElement={handleDragElement}
+          onDragSelectedElements={handleDragSelectedElements}
           onGroupDragStart={onGroupDragStart}
           onGroupDragMove={onGroupDragMove}
           onResizeElement={resizeElement}
@@ -2111,68 +2460,16 @@ export default function CanvasPage() {
           editingConnectorLabel={editingConnectorLabel}
           onLineEndpointDrag={moveLineEndpoint}
           onLineEndpointDragEnd={moveLineEndpoint}
-          onConnectorEndpointDrag={(id, endpoint, wx, wy) => {
-            moveConnectorEndpoint(id, endpoint, wx, wy);
-            const excludeIds = new Set([id]);
-            const nearby = findNearbyAnchors({ x: wx, y: wy }, elements, excludeIds);
-            setConnectorSnapAnchors(nearby.flatMap((n) => n.anchors));
-            const snap = findSnapTarget({ x: wx, y: wy }, elements, excludeIds);
-            setConnectorSnapTarget(snap ? snap.anchor : null);
-          }}
-          onConnectorEndpointDragEnd={(id, endpoint, wx, wy) => {
-            finalizeConnectorEndpoint(id, endpoint, wx, wy);
-            setConnectorSnapAnchors([]);
-            setConnectorSnapTarget(null);
-          }}
-          onConnectorMidpointDrag={moveConnectorMidpoint}
-          onConnectorMidpointDragEnd={moveConnectorMidpoint}
-          onConnectorLabelClick={(id) => {
-            const el = elements.find((e) => e.id === id);
-            if (el?.type === "connector") {
-              setEditingElementId(id);
-              setEditingConnectorLabel(true);
-              setEditText(el.labelText.trim());
-            }
-          }}
-          onStagePointerDown={(worldX, worldY) => {
-            if (isSpacebarPressedRef.current) return;
-            clearSelection();
-            marqueeStartRef.current = { x: worldX, y: worldY };
-          }}
-          onStagePointerMove={(worldX, worldY) => {
-            connectionRef.current?.setCursor({ x: worldX, y: worldY });
-            if (marqueeStartRef.current) {
-              const start = marqueeStartRef.current;
-              setMarqueeRect({
-                x: Math.min(start.x, worldX),
-                y: Math.min(start.y, worldY),
-                width: Math.abs(worldX - start.x),
-                height: Math.abs(worldY - start.y),
-              });
-            }
-          }}
-          onStagePointerUp={() => {
-            if (marqueeRect && marqueeRect.width > 2 && marqueeRect.height > 2) {
-              const ids = elements
-                .filter((el) => {
-                  return (
-                    el.x < marqueeRect.x + marqueeRect.width &&
-                    el.x + el.width > marqueeRect.x &&
-                    el.y < marqueeRect.y + marqueeRect.height &&
-                    el.y + el.height > marqueeRect.y
-                  );
-                })
-                .map((el) => el.id);
-              if (ids.length > 0) {
-                setSelectedElementIds(new Set(ids));
-              }
-            }
-            marqueeStartRef.current = null;
-            setMarqueeRect(null);
-          }}
+          onConnectorEndpointDrag={handleConnectorEndpointDrag}
+          onConnectorEndpointDragEnd={handleConnectorEndpointDragEnd}
+          onConnectorLabelClick={handleConnectorLabelClick}
+          onStagePointerDown={handleStagePointerDown}
+          onStagePointerMove={handleStagePointerMove}
+          onStagePointerUp={handleStagePointerUp}
           marqueeRect={marqueeRect}
           connectorSnapAnchors={connectorSnapAnchors}
           connectorSnapTarget={connectorSnapTarget}
+          spatialIndex={spatialIndexRef.current}
         />
 
         {/* Remote cursor overlay */}
@@ -2187,6 +2484,9 @@ export default function CanvasPage() {
             editingConnectorLabel={editingConnectorLabel}
             onStartEditingConnectorLabel={
               selectedElement.type === "connector" ? handleStartEditingConnectorLabel : undefined
+            }
+            onDissolveFrame={
+              selectedElement.type === "frame" ? dissolveFrame : undefined
             }
           />
         )}
@@ -2203,14 +2503,13 @@ export default function CanvasPage() {
                 type="text"
                 value={editText}
                 onChange={(e) => handleEditTextChange(e.target.value)}
-                onBlur={commitEdit}
+                onBlur={handleConnectorLabelBlur}
                 onKeyDown={(e) => {
                   if (e.key === "Escape" || e.key === "Enter") {
                     commitEdit();
                   }
                   e.stopPropagation();
                 }}
-                size={Math.max(1, editText.length)}
                 className="ring-1 ring-[#60a5fa] rounded bg-[#1a1a1a]/90 outline-none text-center"
                 style={{
                   display: "block",
@@ -2221,7 +2520,7 @@ export default function CanvasPage() {
                   color: editingElement.labelFill,
                   padding: "2px 8px",
                   minWidth: 60,
-                  width: `${Math.max(60, editText.length * editingElement.labelFontSize * 0.6 + 20)}px`,
+                  width: `${Math.max(60, measureLabelWidth(editText || " ", editingElement.labelFontSize, editingElement.labelFontFamily, editingElement.labelBold) + 24)}px`,
                 }}
               />
             ) : editingElement.type === "frame" ? (
@@ -2297,13 +2596,21 @@ export default function CanvasPage() {
           onPointerLeave={onOverlayPointerLeave}
         />
 
+        {/* AI Chat Panel */}
+        <AiChatPanel
+          open={aiChatOpen}
+          onClose={() => setAiChatOpen(false)}
+          onSendMessage={sendAiMessage}
+          ref={aiChatHandlerRef}
+        />
+
         {/* Toolbar */}
         <Toolbar
-          activeTool={activeTool}
-          onToolChange={handleToolChange}
           onDelete={deleteSelectedElements}
           onDuplicate={duplicateSelectedElements}
           hasSelection={selectedElementIds.size > 0}
+          aiChatOpen={aiChatOpen}
+          onAiChatToggle={() => setAiChatOpen((prev) => !prev)}
         />
 
         {/* Custom rotation cursor */}
@@ -2320,9 +2627,7 @@ export default function CanvasPage() {
           <DebugMetrics
             camera={camera}
             elements={elements}
-            activeTool={activeTool}
             isPanning={isPanning}
-            isDraggingElement={isDraggingElement}
             isDrawing={isDrawing}
             editingElementId={editingElementId}
             pointerPositionRef={pointerPositionRef}

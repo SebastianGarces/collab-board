@@ -26,7 +26,73 @@ type PerfProbeCollector = {
   markInput: () => void;
   recordProbe: (kind: PerfProbeKind, latencyMs: number) => void;
   getSummary: () => PerfSummary;
+  reset: () => void;
 };
+
+const MAX_FRAME_SAMPLES = 600;
+const MAX_INPUT_SAMPLES = 600;
+const MAX_PROBE_SAMPLES = 300;
+
+class RingBuffer {
+  private buf: Float64Array;
+  private head = 0;
+  private _size = 0;
+
+  constructor(private capacity: number) {
+    this.buf = new Float64Array(capacity);
+  }
+
+  push(value: number) {
+    this.buf[this.head] = value;
+    this.head = (this.head + 1) % this.capacity;
+    if (this._size < this.capacity) this._size++;
+  }
+
+  get size() {
+    return this._size;
+  }
+
+  toArray(): number[] {
+    if (this._size === 0) return [];
+    if (this._size < this.capacity) {
+      return Array.from(this.buf.subarray(0, this._size));
+    }
+    const result = new Array<number>(this.capacity);
+    for (let i = 0; i < this.capacity; i++) {
+      result[i] = this.buf[(this.head + i) % this.capacity];
+    }
+    return result;
+  }
+
+  clear() {
+    this.head = 0;
+    this._size = 0;
+  }
+
+  reduce(fn: (acc: number, val: number) => number, initial: number): number {
+    let acc = initial;
+    if (this._size < this.capacity) {
+      for (let i = 0; i < this._size; i++) acc = fn(acc, this.buf[i]);
+    } else {
+      for (let i = 0; i < this.capacity; i++) {
+        acc = fn(acc, this.buf[(this.head + i) % this.capacity]);
+      }
+    }
+    return acc;
+  }
+
+  count(predicate: (val: number) => boolean): number {
+    let c = 0;
+    if (this._size < this.capacity) {
+      for (let i = 0; i < this._size; i++) if (predicate(this.buf[i])) c++;
+    } else {
+      for (let i = 0; i < this.capacity; i++) {
+        if (predicate(this.buf[(this.head + i) % this.capacity])) c++;
+      }
+    }
+    return c;
+  }
+}
 
 function percentile(values: number[], p: number): number {
   if (values.length === 0) return 0;
@@ -51,12 +117,16 @@ function toStats(values: number[]): PerfStats {
   };
 }
 
+function ringToStats(ring: RingBuffer): PerfStats {
+  return toStats(ring.toArray());
+}
+
 export function createPerfProbeCollector(): PerfProbeCollector {
-  const frameDurations: number[] = [];
-  const inputToRenderDurations: number[] = [];
-  const probeDurations: Record<PerfProbeKind, number[]> = {
-    cursor: [],
-    object: []
+  const frameDurations = new RingBuffer(MAX_FRAME_SAMPLES);
+  const inputToRenderDurations = new RingBuffer(MAX_INPUT_SAMPLES);
+  const probeDurations: Record<PerfProbeKind, RingBuffer> = {
+    cursor: new RingBuffer(MAX_PROBE_SAMPLES),
+    object: new RingBuffer(MAX_PROBE_SAMPLES),
   };
 
   let rafId = 0;
@@ -101,10 +171,10 @@ export function createPerfProbeCollector(): PerfProbeCollector {
       probeDurations[kind].push(Math.max(0, latencyMs));
     },
     getSummary() {
-      const totalFrameTime = frameDurations.reduce((sum, value) => sum + value, 0);
-      const avgFrameTime = frameDurations.length ? totalFrameTime / frameDurations.length : 0;
+      const totalFrameTime = frameDurations.reduce((acc, v) => acc + v, 0);
+      const avgFrameTime = frameDurations.size ? totalFrameTime / frameDurations.size : 0;
       const fps = avgFrameTime > 0 ? 1000 / avgFrameTime : 0;
-      const longFrames = frameDurations.filter((duration) => duration > 16.7).length;
+      const longFrames = frameDurations.count((d) => d > 16.7);
       const sampleWindowMs = firstFrameAt && lastFrameAt ? lastFrameAt - firstFrameAt : 0;
       const longFramesPerMinute =
         sampleWindowMs > 0 ? longFrames * (60_000 / sampleWindowMs) : 0;
@@ -112,15 +182,24 @@ export function createPerfProbeCollector(): PerfProbeCollector {
       return {
         canvasFps: {
           avg: fps,
-          sampleCount: frameDurations.length
+          sampleCount: frameDurations.size
         },
         canvasLongFramesPerMinute: longFramesPerMinute,
-        inputToRenderMs: toStats(inputToRenderDurations),
+        inputToRenderMs: ringToStats(inputToRenderDurations),
         probeLatencyMs: {
-          cursor: toStats(probeDurations.cursor),
-          object: toStats(probeDurations.object)
+          cursor: ringToStats(probeDurations.cursor),
+          object: ringToStats(probeDurations.object)
         }
       };
+    },
+    reset() {
+      frameDurations.clear();
+      inputToRenderDurations.clear();
+      probeDurations.cursor.clear();
+      probeDurations.object.clear();
+      lastFrameAt = 0;
+      firstFrameAt = 0;
+      lastInputAt = null;
     }
   };
 }

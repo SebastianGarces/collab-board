@@ -34,6 +34,13 @@
     "inputToRenderMs": {
       "p95Max": 16.7,
       "p99Max": 33.4
+    },
+    "aiResponseLatencyMs": {
+      "singleStepP95Max": 2000,
+      "singleStepP99Max": 4000
+    },
+    "aiReliability": {
+      "minPassRate": 80
     }
   }
 }

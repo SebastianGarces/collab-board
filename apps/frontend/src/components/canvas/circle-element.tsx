@@ -20,6 +20,7 @@ export const CircleContent = memo(function CircleContent({ element }: CircleCont
       stroke={element.stroke}
       strokeWidth={2}
       perfectDrawEnabled={false}
+      shadowForStrokeEnabled={false}
     />
   );
 });

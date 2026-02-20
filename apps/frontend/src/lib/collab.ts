@@ -4,11 +4,16 @@ import * as decoding from "lib0/decoding";
 import * as encoding from "lib0/encoding";
 
 import {
+  type AiChatRequest,
+  type AiChatResponse,
+  type AiConversationMessage,
   type PerfProbeKind,
   type PerfProbeMessage,
   type PresenceState,
   type PresenceUser,
+  WS_MESSAGE_AI,
   WS_MESSAGE_PERF_PROBE,
+  WS_MESSAGE_PRESENCE,
   WS_MESSAGE_SYNC
 } from "@collab/shared/collab";
 
@@ -23,6 +28,7 @@ export type ConnectionState = "connecting" | "connected" | "reconnecting" | "dis
 const RECONNECT_BASE_MS = 1000;
 const RECONNECT_MAX_MS = 30_000;
 const RECONNECT_JITTER = 0.3;
+const CURSOR_THROTTLE_MS = 50;
 
 function toWebSocketURL(roomId: string) {
   const apiURL = new URL(process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3000");
@@ -43,14 +49,17 @@ export function createCollabConnection(args: {
   onStatesChange: (states: Map<number, PresenceState>, localClientId: number) => void;
   onConnectionStateChange?: (state: ConnectionState) => void;
   onPerfProbe?: (probe: PerfProbeMessage & { latencyMs: number }) => void;
+  onAiResponse?: (response: AiChatResponse) => void;
 }) {
   const doc = new Y.Doc();
-  const presence = doc.getMap<PresenceState>("presence");
 
   let ws: WebSocket | null = null;
   let disposed = false;
   let reconnectAttempt = 0;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+
+  // Lightweight presence state (not in Yjs)
+  const remotePresence = new Map<number, PresenceState>();
 
   const send = (payload: Uint8Array) => {
     if (ws?.readyState === WebSocket.OPEN) {
@@ -73,25 +82,28 @@ export function createCollabConnection(args: {
     send(encoding.toUint8Array(encoder));
   };
 
+  const publishPresence = (cursor: { x: number; y: number } | null) => {
+    const payload = JSON.stringify({
+      clientId: doc.clientID,
+      user: args.user,
+      cursor,
+    });
+    const encoder = encoding.createEncoder();
+    encoding.writeVarUint(encoder, WS_MESSAGE_PRESENCE);
+    encoding.writeVarString(encoder, payload);
+    send(encoding.toUint8Array(encoder));
+  };
+
   const emitStates = () => {
     const states = new Map<number, PresenceState>();
-    presence.forEach((value, key) => {
-      const id = Number(key);
-      if (!Number.isFinite(id) || !value?.user) return;
-      states.set(id, value);
-    });
+    states.set(doc.clientID, { user: args.user, cursor: null });
+    for (const [clientId, state] of remotePresence) {
+      states.set(clientId, state);
+    }
     args.onStatesChange(states, doc.clientID);
   };
 
   doc.on("update", handleDocUpdate);
-  presence.observe(emitStates);
-
-  const publishPresence = (cursor: { x: number; y: number } | null) => {
-    presence.set(String(doc.clientID), {
-      user: args.user,
-      cursor
-    });
-  };
 
   const scheduleReconnect = () => {
     if (disposed) return;
@@ -140,6 +152,28 @@ export function createCollabConnection(args: {
         if (reply.length > 1) {
           send(reply);
         }
+      } else if (messageType === WS_MESSAGE_PRESENCE) {
+        try {
+          const rawPayload = decoding.readVarString(decoder);
+          const payload = JSON.parse(rawPayload) as {
+            clientId: number;
+            user: PresenceUser;
+            cursor: { x: number; y: number } | null;
+            removed?: boolean;
+          };
+          if (payload.clientId === doc.clientID) return;
+          if (payload.removed) {
+            remotePresence.delete(payload.clientId);
+          } else {
+            remotePresence.set(payload.clientId, {
+              user: payload.user,
+              cursor: payload.cursor,
+            });
+          }
+          emitStates();
+        } catch {
+          // ignore invalid presence messages
+        }
       } else if (messageType === WS_MESSAGE_PERF_PROBE) {
         try {
           const rawPayload = decoding.readVarString(decoder);
@@ -150,6 +184,14 @@ export function createCollabConnection(args: {
           });
         } catch {
           // ignore invalid perf probes
+        }
+      } else if (messageType === WS_MESSAGE_AI) {
+        try {
+          const rawPayload = decoding.readVarString(decoder);
+          const response = JSON.parse(rawPayload) as AiChatResponse;
+          args.onAiResponse?.(response);
+        } catch {
+          args.onAiResponse?.({ type: "ai_response", id: "", text: "", toolCallSummary: [], error: "Failed to parse AI response" });
         }
       }
     };
@@ -166,7 +208,6 @@ export function createCollabConnection(args: {
 
     socket.onerror = () => {
       if (ws !== socket) return;
-      // onclose will fire after onerror, which triggers reconnect
     };
   }
 
@@ -174,12 +215,28 @@ export function createCollabConnection(args: {
 
   let pendingCursor: { x: number; y: number } | null | undefined;
   let cursorRafId: number | null = null;
+  let lastCursorSendAt = 0;
+  let cursorThrottleTimer: ReturnType<typeof setTimeout> | null = null;
 
   const flushCursor = () => {
     cursorRafId = null;
     if (pendingCursor !== undefined) {
-      publishPresence(pendingCursor);
-      pendingCursor = undefined;
+      const now = performance.now();
+      const elapsed = now - lastCursorSendAt;
+      if (elapsed >= CURSOR_THROTTLE_MS) {
+        lastCursorSendAt = now;
+        publishPresence(pendingCursor);
+        pendingCursor = undefined;
+      } else if (!cursorThrottleTimer) {
+        cursorThrottleTimer = setTimeout(() => {
+          cursorThrottleTimer = null;
+          if (pendingCursor !== undefined) {
+            lastCursorSendAt = performance.now();
+            publishPresence(pendingCursor);
+            pendingCursor = undefined;
+          }
+        }, CURSOR_THROTTLE_MS - elapsed);
+      }
     }
   };
 
@@ -188,6 +245,26 @@ export function createCollabConnection(args: {
     if (cursorRafId === null) {
       cursorRafId = requestAnimationFrame(flushCursor);
     }
+  };
+
+  const sendAiMessage = (
+    prompt: string,
+    conversationHistory?: AiConversationMessage[],
+    selectedElementIds?: string[]
+  ): string => {
+    const id = crypto.randomUUID();
+    const request: AiChatRequest = {
+      type: "ai_request",
+      id,
+      prompt,
+      conversationHistory,
+      selectedElementIds: selectedElementIds?.length ? selectedElementIds : undefined,
+    };
+    const encoder = encoding.createEncoder();
+    encoding.writeVarUint(encoder, WS_MESSAGE_AI);
+    encoding.writeVarString(encoder, JSON.stringify(request));
+    send(encoding.toUint8Array(encoder));
+    return id;
   };
 
   const sendPerfProbe = (kind: PerfProbeKind, id: string) => {
@@ -210,20 +287,23 @@ export function createCollabConnection(args: {
       cancelAnimationFrame(cursorRafId);
       cursorRafId = null;
     }
+    if (cursorThrottleTimer !== null) {
+      clearTimeout(cursorThrottleTimer);
+      cursorThrottleTimer = null;
+    }
     if (reconnectTimer !== null) {
       clearTimeout(reconnectTimer);
       reconnectTimer = null;
     }
-    presence.delete(String(doc.clientID));
+    publishPresence(null);
     if (ws) {
       ws.close();
       ws = null;
     }
     doc.off("update", handleDocUpdate);
-    presence.unobserve(emitStates);
     doc.destroy();
     args.onConnectionStateChange?.("disconnected");
   };
 
-  return { doc, disconnect, setCursor, sendPerfProbe };
+  return { doc, disconnect, setCursor, sendPerfProbe, sendAiMessage };
 }

@@ -1,9 +1,9 @@
-import * as syncProtocol from "y-protocols/sync";
-import * as Y from "yjs";
 import * as decoding from "lib0/decoding";
 import * as encoding from "lib0/encoding";
+import * as syncProtocol from "y-protocols/sync";
+import * as Y from "yjs";
 
-import { WS_MESSAGE_PERF_PROBE, WS_MESSAGE_SYNC } from "@collab/shared/collab";
+import { WS_MESSAGE_AI, WS_MESSAGE_PERF_PROBE, WS_MESSAGE_PRESENCE, WS_MESSAGE_SYNC } from "@collab/shared/collab";
 
 export type SocketLike = {
   send: (data: Uint8Array) => void;
@@ -18,8 +18,8 @@ type Room = {
   id: string;
   doc: Y.Doc;
   clients: Set<SocketLike>;
-  /** Maps each socket to the presence keys it owns (for cleanup on disconnect). */
-  socketPresenceKeys: Map<SocketLike, Set<string>>;
+  /** Lightweight presence state per socket (cursor + user info, not stored in Yjs). */
+  socketPresence: Map<SocketLike, { clientId: number; payload: string }>;
   /** Whether the initial DB state has been loaded. */
   loaded: boolean;
   /** Whether the room has been disposed (prevents stale async callbacks). */
@@ -28,6 +28,10 @@ type Room = {
   pendingMessages: Array<{ socket: SocketLike; raw: unknown }>;
   /** Handle for the periodic save timer. */
   saveTimer: ReturnType<typeof setInterval> | null;
+  /** When true, doc updates are queued instead of broadcast immediately. */
+  broadcastPaused: boolean;
+  /** Updates collected while broadcasting is paused. */
+  pendingUpdates: Uint8Array[];
   dispose: () => void;
 };
 
@@ -69,6 +73,12 @@ const SAVE_INTERVAL_MS = 30_000;
 export class RoomManager {
   private readonly rooms = new Map<string, Room>();
   private readonly persistence: PersistenceAdapter | null;
+
+  /** Called when a WS_MESSAGE_AI is received. Set by the AI handler. */
+  onAiMessage:
+    | ((roomId: string, socket: SocketLike, doc: Y.Doc, payload: string) => void)
+    | null = null;
+
   private readonly metrics: RoomManagerMetrics = {
     connectionsTotal: 0,
     disconnectionsTotal: 0,
@@ -127,11 +137,20 @@ export class RoomManager {
 
     const doc = new Y.Doc();
     const clients = new Set<SocketLike>();
-    const socketPresenceKeys = new Map<SocketLike, Set<string>>();
-    const presence = doc.getMap("presence");
+    const socketPresence = new Map<SocketLike, { clientId: number; payload: string }>();
 
     // Broadcast doc updates to every client except the one that sent it.
+    // When broadcastPaused is true, server-side updates (origin is not a
+    // connected client socket) are queued and flushed later. Client-originated
+    // updates (origin is a socket) still broadcast immediately.
     const onUpdate = (update: Uint8Array, origin: unknown) => {
+      const isClientOrigin = origin != null && clients.has(origin as SocketLike);
+
+      if (room.broadcastPaused && !isClientOrigin) {
+        room.pendingUpdates.push(update);
+        return;
+      }
+
       const encoder = encoding.createEncoder();
       encoding.writeVarUint(encoder, WS_MESSAGE_SYNC);
       syncProtocol.writeUpdate(encoder, update);
@@ -145,26 +164,7 @@ export class RoomManager {
       }
     };
 
-    // Track which presence keys each socket writes so we can clean up on disconnect.
-    const onPresenceChange = (event: Y.YMapEvent<unknown>, transaction: Y.Transaction) => {
-      const origin = transaction.origin;
-      if (!origin || !clients.has(origin as SocketLike)) return;
-
-      const socket = origin as SocketLike;
-      for (const [key, change] of event.changes.keys) {
-        if (change.action === "add" || change.action === "update") {
-          let keys = socketPresenceKeys.get(socket);
-          if (!keys) {
-            keys = new Set();
-            socketPresenceKeys.set(socket, keys);
-          }
-          keys.add(key);
-        }
-      }
-    };
-
     doc.on("update", onUpdate);
-    presence.observe(onPresenceChange);
 
     const saveTimer = this.persistence
       ? setInterval(() => {
@@ -177,15 +177,16 @@ export class RoomManager {
       id: roomId,
       doc,
       clients,
-      socketPresenceKeys,
+      socketPresence,
       loaded: !this.persistence,
       disposed: false,
       pendingMessages: [],
+      broadcastPaused: false,
+      pendingUpdates: [],
       saveTimer,
       dispose: () => {
         room.disposed = true;
         if (saveTimer) clearInterval(saveTimer);
-        presence.unobserve(onPresenceChange);
         doc.off("update", onUpdate);
         doc.destroy();
       }
@@ -198,14 +199,6 @@ export class RoomManager {
         if (room.disposed) return;
         if (state && state.length > 0) {
           Y.applyUpdate(doc, state);
-        }
-        // Clear stale presence entries from the persisted state.
-        // All presence data is transient; real clients will re-publish on connect.
-        const persistedPresence = doc.getMap("presence");
-        if (persistedPresence.size > 0) {
-          doc.transact(() => {
-            persistedPresence.clear();
-          });
         }
         room.loaded = true;
         for (const pending of room.pendingMessages) {
@@ -240,6 +233,15 @@ export class RoomManager {
       this.observeOutbound(payload.byteLength);
       socket.send(payload);
     }
+    // Send existing presence state to the new client
+    for (const [, entry] of room.socketPresence) {
+      const encoder = encoding.createEncoder();
+      encoding.writeVarUint(encoder, WS_MESSAGE_PRESENCE);
+      encoding.writeVarString(encoder, entry.payload);
+      const msg = encoding.toUint8Array(encoder);
+      this.observeOutbound(msg.byteLength);
+      socket.send(msg);
+    }
   }
 
   disconnect(roomId: string, socket: SocketLike) {
@@ -249,15 +251,25 @@ export class RoomManager {
 
     room.clients.delete(socket);
 
-    // Remove presence entries owned by the disconnecting socket.
-    const keys = room.socketPresenceKeys.get(socket);
-    if (keys && keys.size > 0) {
-      const presence = room.doc.getMap("presence");
-      for (const key of keys) {
-        presence.delete(key);
+    // Broadcast presence removal to remaining clients
+    const entry = room.socketPresence.get(socket);
+    if (entry && room.clients.size > 0) {
+      const removalPayload = JSON.stringify({
+        clientId: entry.clientId,
+        user: { id: "", name: "", color: "" },
+        cursor: null,
+        removed: true,
+      });
+      const encoder = encoding.createEncoder();
+      encoding.writeVarUint(encoder, WS_MESSAGE_PRESENCE);
+      encoding.writeVarString(encoder, removalPayload);
+      const msg = encoding.toUint8Array(encoder);
+      for (const client of room.clients) {
+        this.observeOutbound(msg.byteLength);
+        client.send(msg);
       }
     }
-    room.socketPresenceKeys.delete(socket);
+    room.socketPresence.delete(socket);
 
     if (room.clients.size === 0) {
       this.saveRoom(room).finally(() => {
@@ -310,6 +322,30 @@ export class RoomManager {
             client.send(payload);
           }
         }
+      } else if (messageType === WS_MESSAGE_PRESENCE) {
+        const rawPayload = decoding.readVarString(decoder);
+        // Track presence per socket for new-client catch-up and disconnect cleanup
+        try {
+          const parsed = JSON.parse(rawPayload) as { clientId: number };
+          room.socketPresence.set(socket, { clientId: parsed.clientId, payload: rawPayload });
+        } catch { /* ignore parse errors for tracking */ }
+
+        // Broadcast to all other clients (no Yjs involved)
+        const outbound = encoding.createEncoder();
+        encoding.writeVarUint(outbound, WS_MESSAGE_PRESENCE);
+        encoding.writeVarString(outbound, rawPayload);
+        const presenceMsg = encoding.toUint8Array(outbound);
+        for (const client of room.clients) {
+          if (client !== socket) {
+            this.observeOutbound(presenceMsg.byteLength);
+            client.send(presenceMsg);
+          }
+        }
+      } else if (messageType === WS_MESSAGE_AI) {
+        const payload = decoding.readVarString(decoder);
+        if (this.onAiMessage) {
+          this.onAiMessage(roomId, socket, room.doc, payload);
+        }
       }
     } catch (error) {
       this.metrics.invalidMessagesTotal += 1;
@@ -319,11 +355,53 @@ export class RoomManager {
     }
   }
 
+  getDoc(roomId: string): Y.Doc | null {
+    const room = this.rooms.get(roomId);
+    if (!room || !room.loaded || room.disposed) return null;
+    return room.doc;
+  }
+
+  /**
+   * Pause broadcasting Yjs updates for a room. Updates from server-side
+   * mutations (e.g. AI agent) are queued and flushed when `resumeBroadcast`
+   * is called. Client-originated sync messages still flow normally.
+   */
+  pauseBroadcast(roomId: string): void {
+    const room = this.rooms.get(roomId);
+    if (!room) return;
+    room.broadcastPaused = true;
+  }
+
+  /**
+   * Resume broadcasting and flush all queued updates as a single merged
+   * update to every connected client.
+   */
+  resumeBroadcast(roomId: string): void {
+    const room = this.rooms.get(roomId);
+    if (!room) return;
+    room.broadcastPaused = false;
+
+    if (room.pendingUpdates.length === 0) return;
+
+    const merged = Y.mergeUpdates(room.pendingUpdates);
+    room.pendingUpdates.length = 0;
+
+    const encoder = encoding.createEncoder();
+    encoding.writeVarUint(encoder, WS_MESSAGE_SYNC);
+    syncProtocol.writeUpdate(encoder, merged);
+    const payload = encoding.toUint8Array(encoder);
+
+    for (const client of room.clients) {
+      this.observeOutbound(payload.byteLength);
+      client.send(payload);
+    }
+  }
+
   getDebugSnapshot() {
     return Array.from(this.rooms.values()).map((room) => ({
       roomId: room.id,
       clients: room.clients.size,
-      presenceEntries: room.doc.getMap("presence").size
+      presenceEntries: room.socketPresence.size
     }));
   }
 

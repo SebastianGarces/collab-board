@@ -1,6 +1,6 @@
 # CollabBoard Build Checklist
 
-**Last updated**: February 17, 2026
+**Last updated**: February 20, 2026
 
 This checklist tracks what has been implemented against the full spec in `collab-board.md`, informed by the architecture decisions in `pre-search.md`. Items are organized by dependency layer so you can work top-to-bottom without getting blocked.
 
@@ -17,17 +17,17 @@ This checklist tracks what has been implemented against the full spec in `collab
 ## Dependency Graph
 
 ```
-Layer 0 (no blockers - can start now)
-├── WS auth enforcement
-├── Disconnect/reconnect resilience
-├── Dashboard page (board list, create, delete)
-├── Circle shape
-├── Line shape
-├── Standalone text elements
-├── Sticky note color picker UI
-├── Multi-select (shift-click + marquee)
-├── Rotate transform
-└── Input validation / XSS sanitization
+Layer 0 (depends on nothing) ✓ ALL DONE
+├── WS auth enforcement ← DONE
+├── Disconnect/reconnect resilience ← DONE
+├── Dashboard page (board list, create, delete) ← DONE
+├── Circle shape ← DONE
+├── Line shape ← DONE
+├── Standalone text elements ← DONE
+├── Sticky note color picker UI ← DONE
+├── Multi-select (shift-click + marquee) ← DONE
+├── Rotate transform ← DONE
+└── Input validation / XSS sanitization ← DONE
 
 Layer 1 (depends on Layer 0) ✓ ALL DONE
 ├── Connectors ← DONE
@@ -35,19 +35,19 @@ Layer 1 (depends on Layer 0) ✓ ALL DONE
 ├── Duplicate operation ← DONE
 └── Copy/paste ← DONE
 
-Layer 2 (depends on Layer 1)
-├── AI Agent: tool schema + OpenAI integration ← needs board features to manipulate
-└── AI Agent: chat UI panel ← needs tool integration
+Layer 2 (depends on Layer 1) ✓ ALL DONE
+├── AI Agent: tool schema + OpenAI integration ← DONE
+└── AI Agent: chat UI panel ← DONE
 
-Layer 3 (depends on Layer 2)
-├── AI Agent: complex multi-step commands ← needs basic AI working
-└── AI Agent: layout commands ← needs basic AI + frames
+Layer 3 (depends on Layer 2) ✓ ALL DONE
+├── AI Agent: complex multi-step commands ← DONE (maxSteps=10)
+└── AI Agent: layout commands ← DONE (batch tools + system prompt)
 
 Layer 4 (final — depends on everything above)
-├── AI Development Log
-├── AI Cost Analysis
+├── AI Development Log ← DONE
+├── AI Cost Analysis ← DONE
 ├── Demo Video (3-5 min)
-├── Deployed application (public URL)
+├── Deployed application (public URL) ← DONE
 └── Social Post (X or LinkedIn)
 ```
 
@@ -78,7 +78,7 @@ Layer 4 (final — depends on everything above)
 | 3 | Shapes — Rectangle | [x] Done | Drag-to-draw, resize handles, fill/stroke |
 | 4 | Shapes — Circle | [x] Done | Ellipse via Konva, drag-to-draw, resize handles, fill/stroke |
 | 5 | Shapes — Line | [x] Done | Line via Konva, drag-to-draw, configurable stroke |
-| 6 | Connectors (lines/arrows between objects) | [x] Done | Connector element with 3 routing styles (straight/curved/orthogonal), arrowheads (none/arrow/diamond), dash styles, endpoint snapping to shapes, reactive position tracking, text labels with formatting, composable toolbar |
+| 6 | Connectors (lines/arrows between objects) | [x] Done | Connector element with curved routing, arrowheads (none/arrow/diamond), dash styles, endpoint snapping to shapes, reactive position tracking, text labels with formatting, composable toolbar |
 | 7 | Standalone text elements | [x] Done | Text element with double-click inline editing, configurable font size |
 | 8 | Frames (group + organize areas) | [x] Done | Frame element with title label, bg/border color, solid/dashed/none border, hide/show toggle, child containment on move |
 | 9 | Transforms — Move | [x] Done | Drag via Konva + Yjs transact |
@@ -124,22 +124,24 @@ Layer 4 (final — depends on everything above)
 
 | # | Feature | Status | Notes |
 |---|---------|--------|-------|
-| 1 | OpenAI integration + function calling | [ ] Not done | No `ai/` module in backend |
-| 2 | Tool: `createStickyNote(text, x, y, color)` | [ ] Not done | |
-| 3 | Tool: `createShape(type, x, y, w, h, color)` | [ ] Not done | |
-| 4 | Tool: `createFrame(title, x, y, w, h)` | [ ] Not done | Depends on Frame element type |
-| 5 | Tool: `createConnector(fromId, toId, style)` | [ ] Not done | Connector element type now available |
-| 6 | Tool: `moveObject(objectId, x, y)` | [ ] Not done | |
-| 7 | Tool: `resizeObject(objectId, w, h)` | [ ] Not done | |
-| 8 | Tool: `updateText(objectId, newText)` | [ ] Not done | |
-| 9 | Tool: `changeColor(objectId, color)` | [ ] Not done | |
-| 10 | Tool: `getBoardState()` | [ ] Not done | |
-| 11 | Chat UI panel (send commands, see responses) | [ ] Not done | No AI chat component |
-| 12 | Creation commands (6+ types) | [ ] Not done | |
-| 13 | Manipulation commands | [ ] Not done | |
-| 14 | Layout commands (grid, spacing) | [ ] Not done | |
-| 15 | Complex commands (templates: SWOT, retro, journey map) | [ ] Not done | |
-| 16 | Response latency < 2s for single-step | [ ] Not done | |
+| 1 | OpenAI integration + function calling | [x] Done | LangChain.js + OpenAI GPT-5.1, LangSmith tracing |
+| 2 | Tool: `createStickyNote(text, x, y, color)` | [x] Done | Yjs transact, random color default |
+| 3 | Tool: `createShape(type, x, y, w, h, color)` | [x] Done | rectangle, circle, line |
+| 4 | Tool: `createFrame(title, x, y, w, h)` | [x] Done | |
+| 5 | Tool: `createConnector(fromId, toId, style)` | [x] Done | curved |
+| 6 | Tool: `moveObject(objectId, x, y)` | [x] Done | |
+| 7 | Tool: `resizeObject(objectId, w, h)` | [x] Done | |
+| 8 | Tool: `updateText(objectId, newText)` | [x] Done | |
+| 9 | Tool: `changeColor(objectId, color)` | [x] Done | |
+| 10 | Tool: `getBoardState()` | [x] Done | |
+| 11 | Chat UI panel (send commands, see responses) | [x] Done | Slide-out panel with message history, tool call badges |
+| 12 | Creation commands (6+ types) | [x] Done | sticky-note, rect, circle, line, text, frame, connector via batch tools |
+| 13 | Manipulation commands | [x] Done | move, resize, color, text, delete + batchModifyElements |
+| 14 | Layout commands (grid, spacing) | [x] Done | batchCreateElements with positional math in system prompt |
+| 15 | Complex commands (templates: SWOT, retro, journey map) | [x] Done | System prompt instructs template creation with frames + sticky notes |
+| 16 | Response latency < 2s for single-step | [~] Partial | p95 3268ms exceeds 2000ms budget because complex template commands (SWOT, diagrams, column layouts) are optimized into single atomic tool calls. Simple single-object commands (create, move, recolor) complete in 1-2s within budget. See `docs/ai-development-log.md` for full analysis. |
+| 17 | Conversation context (multi-turn) | [x] Done | History passed via WS, capped at 10 messages, system prompt supports follow-ups |
+| 18 | AI perf testing (LangSmith traces) | [x] Done | `bun run ai:perf-check` validates latency p95/p99 against budgets |
 
 ---
 
@@ -166,52 +168,19 @@ Layer 4 (final — depends on everything above)
 
 | # | Deliverable | Status | Notes |
 |---|-------------|--------|-------|
-| 1 | GitHub repository with setup guide | [~] Partial | README exists, could use more detail |
+| 1 | GitHub repository with setup guide | [x] Done | README with architecture diagram, tech stack, env vars, setup guide, deployed URL |
 | 2 | Pre-Search document | [x] Done | `docs/pre-search.md` |
-| 3 | AI Development Log (1-page) | [ ] Not done | |
-| 4 | AI Cost Analysis (dev spend + projections) | [ ] Not done | |
+| 3 | AI Development Log (1-page) | [x] Done | `docs/ai-development-log.md` -- tools/workflow, MCP, prompts, code analysis, learnings |
+| 4 | AI Cost Analysis (dev spend + projections) | [x] Done | `docs/ai-cost-analysis.md` + `bun run ai:cost-analysis` (LangSmith), per-model projections with gpt-5.1 as production model |
 | 5 | Demo Video (3-5 min) | [ ] Not done | |
-| 6 | Deployed application (publicly accessible) | [x] Done | Railway, auto-deploy on push to main |
+| 6 | Deployed application (publicly accessible) | [x] Done | Railway, `gsgarces.dev` (frontend) + `api.gsgarces.dev` (backend) |
 | 7 | Social Post (X or LinkedIn) | [ ] Not done | |
 
 ---
 
-## Recommended Build Order
+## Remaining Work
 
-Based on the dependency graph and deadlines, here is the suggested order for remaining work:
+Layers 0-3 are complete. Layer 4 remaining:
 
-### Sprint 1: MVP Polish + Core Gaps (highest priority)
-1. **Disconnect/reconnect resilience** — add retry with exponential backoff in `collab.ts`
-2. **Dashboard page** — board listing, create new board, delete board
-3. **Board CRUD completion** — delete endpoint, ownership enforcement
-
-### Sprint 2: Remaining Board Features (Layer 0)
-5. **Circle shape** — add to `ElementType`, create component, add to toolbar
-6. **Line shape** — add to `ElementType`, create component, add to toolbar
-7. **Standalone text elements** — new element type with inline editing
-8. **Sticky note color picker** — popover UI to change color after creation
-9. **Multi-select** — shift-click for additive selection, marquee rubber-band
-10. **Rotate transform** — rotation handle + rotation property on elements
-11. **Input validation** — sanitize text content for XSS prevention
-12. **WebSocket auth** — validate session cookie/token on WS upgrade
-
-### Sprint 3: Compound Features (Layer 1)
-13. **Connectors** — line/arrow elements that snap to shape endpoints
-14. **Frames** — container element type with title, child containment
-15. **Duplicate operation** — Ctrl+D / toolbar, works with multi-select
-16. **Copy/paste** — Ctrl+C/V with clipboard, works with multi-select
-
-### Sprint 4: AI Agent (Layers 2-3)
-17. **AI backend** — OpenAI client, tool definitions, function calling pipeline
-18. **AI tool implementations** — createStickyNote, createShape, moveObject, etc.
-19. **AI chat UI** — side panel or command bar with shadcn Sheet/Command
-20. **AI basic commands** — single-step creation and manipulation
-21. **AI layout commands** — grid arrangement, spacing
-22. **AI complex commands** — SWOT template, retro board, journey map
-
-### Sprint 5: Polish + Deliverables (Layer 4)
-22. **AI Development Log** — document tools, prompts, code analysis
-23. **AI Cost Analysis** — dev spend tracking + production projections
-24. **Demo Video** — 3-5 min recording covering collab + AI + architecture
-25. **Verify deployment** — confirm public URL supports 5+ concurrent users
-26. **Social Post** — share on X or LinkedIn tagging @GauntletAI
+1. **Demo Video** — 3-5 min recording covering real-time collaboration, AI commands, architecture
+2. **Social Post** — share on X or LinkedIn tagging @GauntletAI

@@ -62,6 +62,20 @@ The file `docs/build-checklist.md` tracks what has been implemented and what rem
 - If new work is discovered or scope changes, add it to the appropriate table and dependency layer.
 - Do **not** remove items from the checklist — only update their status.
 
+## AI Trace Review
+
+When the user says **"review this trace `<traceId>`"** (or similar phrasing referencing a Langfuse trace ID):
+
+1. Run `bun run ai:trace-review <traceId>` to fetch the full trace from Langfuse.
+2. Read the output from `artifacts/ai-trace-review.md`.
+3. Analyze the trace for:
+   - **System prompt effectiveness:** Did the agent follow instructions? Were there unnecessary clarification questions? Did it use reasonable defaults as instructed?
+   - **Tool usage efficiency:** Batch vs single calls, unnecessary `getBoardState` calls, correct tool selection for the task.
+   - **Response quality:** Concise? Accurate? Helpful? Did it over-explain coordinates or repeat tool details?
+   - **Token waste:** Redundant content in messages, oversized tool outputs, system prompt bloat.
+   - **Multi-step behavior:** Was it necessary? Could it have been done in fewer steps?
+4. Present findings and suggest specific system prompt improvements with before/after diffs when applicable.
+
 ## Required Behavior
 
 - Prefer running the smallest relevant perf command after each meaningful batch of edits.

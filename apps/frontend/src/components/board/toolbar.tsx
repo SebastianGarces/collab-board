@@ -1,19 +1,20 @@
 "use client";
 
 import { memo } from "react";
-import { ArrowRight, Circle, Copy, Hand, LayoutGrid, Minus, MousePointer2, Square, StickyNote, Trash2, Type } from "lucide-react";
+import { ArrowRight, Circle, Copy, Hand, LayoutGrid, Minus, MousePointer2, Sparkles, Square, StickyNote, Trash2, Type } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useCanvasStore } from "@/stores/canvas-store";
 
 export type ActiveTool = "pointer" | "hand" | "sticky-note" | "rectangle" | "circle" | "line" | "text" | "frame" | "connector";
 
 type ToolbarProps = {
-  activeTool: ActiveTool;
-  onToolChange: (tool: ActiveTool) => void;
   onDelete: () => void;
   onDuplicate: () => void;
   hasSelection: boolean;
+  aiChatOpen: boolean;
+  onAiChatToggle: () => void;
 };
 
 const tools: { id: ActiveTool; icon: typeof MousePointer2; label: string }[] = [
@@ -28,7 +29,10 @@ const tools: { id: ActiveTool; icon: typeof MousePointer2; label: string }[] = [
   { id: "connector", icon: ArrowRight, label: "Connector" },
 ];
 
-function ToolbarComponent({ activeTool, onToolChange, onDelete, onDuplicate, hasSelection }: ToolbarProps) {
+function ToolbarComponent({ onDelete, onDuplicate, hasSelection, aiChatOpen, onAiChatToggle }: ToolbarProps) {
+  const activeTool = useCanvasStore((s) => s.activeTool);
+  const setActiveTool = useCanvasStore((s) => s.setActiveTool);
+
   return (
       <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1 bg-[#1a1a1a] border border-[#2a2a2a] rounded-xl px-2 py-1.5 shadow-lg">
         {tools.map((tool) => {
@@ -40,7 +44,7 @@ function ToolbarComponent({ activeTool, onToolChange, onDelete, onDuplicate, has
                 <Button
                   variant={isActive ? "secondary" : "ghost"}
                   size="icon"
-                  onClick={() => onToolChange(tool.id)}
+                  onClick={() => setActiveTool(tool.id)}
                   className="h-9 w-9"
                 >
                   <Icon className="h-4 w-4" />
@@ -83,6 +87,22 @@ function ToolbarComponent({ activeTool, onToolChange, onDelete, onDuplicate, has
           </TooltipTrigger>
           <TooltipContent side="top" sideOffset={8}>
             Delete
+          </TooltipContent>
+        </Tooltip>
+        <div className="w-px h-6 bg-[#2a2a2a] mx-1" />
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={onAiChatToggle}
+              className="h-9 w-9"
+            >
+              <Sparkles className={`h-4 w-4 ${aiChatOpen ? "text-[#3b82f6]" : "text-[#7b8ca8]"}`} />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="top" sideOffset={8}>
+            AI Assistant
           </TooltipContent>
         </Tooltip>
       </div>

@@ -6,10 +6,10 @@ import type * as Y from "yjs";
 import { MIN_ELEMENT_SIZE } from "@/components/canvas/shape-transform";
 import type { BoardElement } from "@collab/shared/collab";
 import {
-  DEFAULT_FONT_FAMILY,
-  DEFAULT_STICKY_NOTE_FONT_SIZE,
-  DEFAULT_CONNECTOR_STROKE,
-  DEFAULT_CONNECTOR_STROKE_WIDTH,
+    DEFAULT_CONNECTOR_STROKE,
+    DEFAULT_CONNECTOR_STROKE_WIDTH,
+    DEFAULT_FONT_FAMILY,
+    DEFAULT_STICKY_NOTE_FONT_SIZE,
 } from "@collab/shared/collab";
 
 function toFiniteNumber(value: unknown, fallback: number): number {
@@ -150,7 +150,6 @@ function yMapToElement(id: string, map: Y.Map<unknown>): BoardElement | null {
   }
 
   if (type === "connector") {
-    const routingStyle = map.get("routingStyle") as string | undefined;
     const startArrow = map.get("startArrow") as string | undefined;
     const endArrow = map.get("endArrow") as string | undefined;
     const dashStyle = map.get("dashStyle") as string | undefined;
@@ -188,10 +187,7 @@ function yMapToElement(id: string, map: Y.Map<unknown>): BoardElement | null {
       fromY,
       toX,
       toY,
-      routingStyle:
-        routingStyle === "orthogonal" || routingStyle === "curved" || routingStyle === "straight"
-          ? routingStyle
-          : "orthogonal",
+      routingStyle: "curved" as const,
       startArrow:
         startArrow === "none" || startArrow === "arrow" || startArrow === "diamond"
           ? startArrow
@@ -206,11 +202,6 @@ function yMapToElement(id: string, map: Y.Map<unknown>): BoardElement | null {
         dashStyle === "solid" || dashStyle === "dashed" || dashStyle === "dotted"
           ? dashStyle
           : "solid",
-      elbowMidpoint: (() => {
-        const raw = map.get("elbowMidpoint");
-        if (typeof raw === "number" && Number.isFinite(raw)) return raw;
-        return null;
-      })(),
       labelText: (map.get("labelText") as string) ?? "",
       labelFontSize: toFiniteNumber(map.get("labelFontSize"), 14),
       labelFontFamily: (map.get("labelFontFamily") as string) || DEFAULT_FONT_FAMILY,
@@ -226,6 +217,7 @@ function yMapToElement(id: string, map: Y.Map<unknown>): BoardElement | null {
 export function useYjsElements(doc: Y.Doc | null): BoardElement[] {
   const [elements, setElements] = useState<BoardElement[]>([]);
   const orderRef = useRef<string[]>([]);
+  const prevCountRef = useRef(0);
 
   useEffect(() => {
     if (!doc) {
@@ -258,6 +250,11 @@ export function useYjsElements(doc: Y.Doc | null): BoardElement[] {
       setElements(next);
     };
 
+    const LOCAL_INTERACTIVE_ORIGINS = new Set([
+      "group-drag-move",
+      "element-drag-move",
+    ]);
+
     let pendingChangedIds = new Set<string>();
     let pendingOrderChange = false;
     let rafId = 0;
@@ -274,38 +271,67 @@ export function useYjsElements(doc: Y.Doc | null): BoardElement[] {
       const nextOrder = orderMayHaveChanged ? buildOrder() : orderRef.current;
       if (nextOrder.length === 0) {
         orderRef.current = nextOrder;
+        // Hint Yjs GC after mass deletion to free tombstone memory
+        if (prevCountRef.current > 0 && doc) {
+          doc.gc = true;
+          doc.transact(() => {}, "gc-hint");
+        }
+        prevCountRef.current = 0;
         setElements([]);
         return;
       }
 
       setElements((prev) => {
         const byId = new Map(prev.map((element) => [element.id, element]));
+        let anyChanged = false;
 
         for (const id of changedIds) {
           const value = elementsMap.get(id);
           if (!value || typeof (value as Y.Map<unknown>).get !== "function") {
-            byId.delete(id);
+            if (byId.has(id)) {
+              byId.delete(id);
+              anyChanged = true;
+            }
             continue;
           }
 
           const nextElement = yMapToElement(id, value as Y.Map<unknown>);
           if (nextElement) {
             byId.set(id, nextElement);
-          } else {
+            anyChanged = true;
+          } else if (byId.has(id)) {
             byId.delete(id);
+            anyChanged = true;
           }
         }
+
+        if (!anyChanged && !orderMayHaveChanged) return prev;
 
         const nextElements = nextOrder
           .map((id) => byId.get(id))
           .filter((value): value is BoardElement => !!value);
+
+        // Structural equality: skip update if same length and all refs match
+        if (nextElements.length === prev.length) {
+          let same = true;
+          for (let i = 0; i < nextElements.length; i++) {
+            if (nextElements[i] !== prev[i]) { same = false; break; }
+          }
+          if (same) return prev;
+        }
+
         orderRef.current = nextOrder;
+        prevCountRef.current = nextElements.length;
         return nextElements;
       });
     };
 
     const syncIncremental = (events: Y.YEvent<Y.AbstractType<any>>[], transaction: Y.Transaction) => {
-      if (transaction.local && transaction.origin === "group-drag-move") return;
+      if (
+        transaction.local &&
+        typeof transaction.origin === "string" &&
+        LOCAL_INTERACTIVE_ORIGINS.has(transaction.origin)
+      ) return;
       for (const event of events) {
         const keyPath = event.path?.[0];
         if (typeof keyPath === "string") {
