@@ -377,13 +377,13 @@ export default function CanvasPage() {
   }, [currentUser, roomId, perfEnabled]);
 
   useEffect(() => {
-    if (!presentationPanelOpen || !yjsDoc) return;
+    if (!yjsDoc) return;
     const slideOrder = yjsDoc.getArray<string>("slideOrder");
     const update = () => setSlideOrderForBadges(slideOrder.toArray());
     update();
     slideOrder.observe(update);
     return () => slideOrder.unobserve(update);
-  }, [presentationPanelOpen, yjsDoc]);
+  }, [yjsDoc]);
 
   useEffect(() => {
     if (!presentationMode || !isFollowing || !activePresenter) return;
@@ -1357,6 +1357,28 @@ export default function CanvasPage() {
     clearSelection();
   }, [clearSelection]);
 
+  const addFrameToPresentation = useCallback((frameId: string) => {
+    const doc = docRef.current;
+    if (!doc) return;
+    const slideOrder = doc.getArray<string>("slideOrder");
+    const existing = new Set(slideOrder.toArray());
+    if (existing.has(frameId)) return;
+    doc.transact(() => {
+      slideOrder.push([frameId]);
+    }, "local");
+  }, []);
+
+  const removeFrameFromPresentation = useCallback((frameId: string) => {
+    const doc = docRef.current;
+    if (!doc) return;
+    const slideOrder = doc.getArray<string>("slideOrder");
+    const idx = slideOrder.toArray().indexOf(frameId);
+    if (idx < 0) return;
+    doc.transact(() => {
+      slideOrder.delete(idx, 1);
+    }, "local");
+  }, []);
+
   const sendAiMessage = useCallback((prompt: string, conversationHistory?: import("@collab/shared/collab").AiConversationMessage[], selectedElementIds?: string[]): string => {
     const connection = connectionRef.current;
     if (!connection) return "";
@@ -1718,7 +1740,7 @@ export default function CanvasPage() {
   panToCreatedElementsRef.current = panToCreatedElements;
 
   const goToSlide = useCallback(
-    (index: number, slides: string[], isPresenter: boolean) => {
+    (index: number, slides: string[], isPresenter: boolean, direction?: "next" | "prev") => {
       const surface = surfaceRef.current;
       const connection = connectionRef.current;
       if (!surface || !connection) return;
@@ -1732,8 +1754,11 @@ export default function CanvasPage() {
       let frame = elements.find((el) => el.id === frameId && el.type === "frame") as FrameElement | undefined;
 
       if (!frame) {
+        const searchForward = direction !== "prev";
         for (let i = 0; i < slideCount; i++) {
-          const idx = (clampedIndex + i) % slideCount;
+          const idx = searchForward
+            ? (clampedIndex + i) % slideCount
+            : (clampedIndex - i + slideCount) % slideCount;
           const fid = slides[idx];
           const f = elements.find((el) => el.id === fid && el.type === "frame");
           if (f) {
@@ -1813,12 +1838,12 @@ export default function CanvasPage() {
 
   const presentationNext = useCallback(() => {
     setIsFollowing(false);
-    goToSlide(currentSlide + 1, presentationSlides, amIPresenter);
+    goToSlide(currentSlide + 1, presentationSlides, amIPresenter, "next");
   }, [currentSlide, presentationSlides, amIPresenter, goToSlide]);
 
   const presentationPrev = useCallback(() => {
     setIsFollowing(false);
-    goToSlide(currentSlide - 1, presentationSlides, amIPresenter);
+    goToSlide(currentSlide - 1, presentationSlides, amIPresenter, "prev");
   }, [currentSlide, presentationSlides, amIPresenter, goToSlide]);
 
   const handleReattach = useCallback(() => {
@@ -1826,6 +1851,53 @@ export default function CanvasPage() {
     setIsFollowing(true);
     goToSlide(activePresenter.slideIndex, activePresenter.slideOrder, false);
   }, [activePresenter, goToSlide]);
+
+  const presentationSlidesRef = useRef(presentationSlides);
+  presentationSlidesRef.current = presentationSlides;
+  const currentSlideRef = useRef(currentSlide);
+  currentSlideRef.current = currentSlide;
+
+  useEffect(() => {
+    if (!presentationMode || !yjsDoc) return;
+    const slideOrder = yjsDoc.getArray<string>("slideOrder");
+    const elementsMap = yjsDoc.getMap("elements");
+
+    const getFrameIds = (): Set<string> => {
+      const ids = new Set<string>();
+      elementsMap.forEach((val, id) => {
+        const map = val as Y.Map<unknown>;
+        if (map?.get?.("type") === "frame") ids.add(id);
+      });
+      return ids;
+    };
+
+    const update = () => {
+      const raw = slideOrder.toArray();
+      const frameIds = getFrameIds();
+      const filteredSlides = raw.filter((id) => frameIds.has(id));
+      setPresentationSlides(filteredSlides);
+      if (filteredSlides.length === 0) {
+        exitPresentation();
+        return;
+      }
+      const slides = presentationSlidesRef.current;
+      const idx = currentSlideRef.current;
+      const currentFrameId = slides[idx];
+      const currentFrameExists = currentFrameId && frameIds.has(currentFrameId);
+      if (!currentFrameExists) {
+        const newIndex = Math.min(idx, filteredSlides.length - 1);
+        goToSlide(newIndex, filteredSlides, amIPresenter, "next");
+      } else {
+        const newIndex = filteredSlides.indexOf(currentFrameId);
+        if (newIndex >= 0 && newIndex !== idx) {
+          setCurrentSlide(newIndex);
+        }
+      }
+    };
+    update();
+    slideOrder.observe(update);
+    return () => slideOrder.unobserve(update);
+  }, [presentationMode, yjsDoc, amIPresenter, goToSlide, exitPresentation]);
 
   const updateElementProperty = useCallback((id: string, key: string, value: unknown) => {
     const doc = docRef.current;
@@ -2615,6 +2687,7 @@ export default function CanvasPage() {
         spatialIndex={spatialIndexRef.current}
         isSpacebarPressedRef={isSpacebarPressedRef}
         isSpacebarPressed={isSpacebarPressed}
+        slideOrderForBadges={presentationPanelOpen && !presentationMode ? slideOrderForBadges : undefined}
       />
 
       {/* Remote cursor overlay */}
@@ -2633,6 +2706,9 @@ export default function CanvasPage() {
           onDissolveFrame={
             selectedElement.type === "frame" ? dissolveFrame : undefined
           }
+          slideOrder={selectedElement.type === "frame" ? slideOrderForBadges : undefined}
+          onAddToPresentation={selectedElement.type === "frame" ? addFrameToPresentation : undefined}
+          onRemoveFromPresentation={selectedElement.type === "frame" ? removeFrameFromPresentation : undefined}
         />
       )}
 
@@ -2780,29 +2856,6 @@ export default function CanvasPage() {
         presentationEnded={presentationEnded}
       />
       )}
-
-      {/* Slide number badges (when panel open, not in presentation) */}
-      {presentationPanelOpen && !presentationMode && slideOrderForBadges.map((frameId, index) => {
-        const frame = elements.find((el) => el.id === frameId && el.type === "frame");
-        if (!frame) return null;
-        const screenX = frame.x * camera.scale + camera.x;
-        const screenY = frame.y * camera.scale + camera.y;
-        return (
-          <div
-            key={frameId}
-            className="absolute z-30 pointer-events-none"
-            style={{
-              left: screenX - 12,
-              top: screenY - 12,
-              transform: "translate(-50%, -50%)",
-            }}
-          >
-            <div className="w-6 h-6 rounded-full bg-blue-500 text-white text-xs font-bold flex items-center justify-center shadow-md">
-              {index + 1}
-            </div>
-          </div>
-        );
-      })}
 
       {/* Toolbar */}
       {!presentationMode && (

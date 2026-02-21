@@ -2,7 +2,7 @@
 
 import type Konva from "konva";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Circle as KonvaCircle, Layer, Rect, Stage } from "react-konva";
+import { Circle as KonvaCircle, Group, Layer, Rect, Stage, Text } from "react-konva";
 
 import type { BoardElement, ConnectorElement, FrameElement, LineElement } from "@collab/shared/collab";
 
@@ -286,6 +286,7 @@ type BoardCanvasProps = {
   spatialIndex?: SpatialIndex;
   isSpacebarPressedRef?: React.RefObject<boolean>;
   isSpacebarPressed?: boolean;
+  slideOrderForBadges?: string[];
 };
 
 export const BoardCanvas = memo(function BoardCanvas({
@@ -321,6 +322,7 @@ export const BoardCanvas = memo(function BoardCanvas({
   spatialIndex,
   isSpacebarPressedRef,
   isSpacebarPressed = false,
+  slideOrderForBadges,
 }: BoardCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const localStageRef = useRef<Konva.Stage | null>(null);
@@ -939,6 +941,46 @@ export const BoardCanvas = memo(function BoardCanvas({
               />
             )}
           </Layer>
+
+          {/* Slide number badges (when presentation panel open, not in presentation mode) */}
+          {slideOrderForBadges && slideOrderForBadges.length > 0 && (
+            <Layer listening={false}>
+              {slideOrderForBadges.map((frameId, index) => {
+                const frame = elementsById.get(frameId) as FrameElement | undefined;
+                if (!frame || frame.type !== "frame") return null;
+                const offset = 12 / camera.scale;
+                const badgeX = frame.x - offset;
+                const badgeY = frame.y - offset;
+                const radius = 12 / camera.scale;
+                return (
+                  <Group key={frameId} x={badgeX} y={badgeY} listening={false}>
+                    <KonvaCircle
+                      radius={radius}
+                      fill="#3b82f6"
+                      shadowColor="black"
+                      shadowBlur={4}
+                      shadowOffset={{ x: 0, y: 1 }}
+                      listening={false}
+                    />
+                    <Text
+                      text={String(index + 1)}
+                      x={-radius}
+                      y={-radius}
+                      width={radius * 2}
+                      height={radius * 2}
+                      fontSize={12 / camera.scale}
+                      fontFamily="system-ui, sans-serif"
+                      fontStyle="bold"
+                      fill="white"
+                      align="center"
+                      verticalAlign="middle"
+                      listening={false}
+                    />
+                  </Group>
+                );
+              })}
+            </Layer>
+          )}
         </Stage>
       )}
     </div>
