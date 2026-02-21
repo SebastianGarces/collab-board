@@ -1,7 +1,7 @@
 "use client";
 
 import { memo, useMemo } from "react";
-import { Eye, EyeClosed, Trash2, Type } from "lucide-react";
+import { Eye, EyeClosed, Presentation, Trash2, Type } from "lucide-react";
 import type { BoardElement, ConnectorElement, ElementType, FrameElement } from "@collab/shared/collab";
 import { STICKY_NOTE_COLORS, SHAPE_COLORS, FRAME_COLORS, FRAME_BORDER_COLORS } from "@collab/shared/collab";
 import { Separator } from "@/components/ui/separator";
@@ -63,6 +63,9 @@ type SelectionToolbarProps = {
   editingConnectorLabel?: boolean;
   onStartEditingConnectorLabel?: () => void;
   onDissolveFrame?: (id: string) => void;
+  slideOrder?: string[];
+  onAddToPresentation?: (frameId: string) => void;
+  onRemoveFromPresentation?: (frameId: string) => void;
 };
 
 function SelectionToolbarComponent({
@@ -72,6 +75,9 @@ function SelectionToolbarComponent({
   editingConnectorLabel,
   onStartEditingConnectorLabel,
   onDissolveFrame,
+  slideOrder,
+  onAddToPresentation,
+  onRemoveFromPresentation,
 }: SelectionToolbarProps) {
   const caps = useMemo(() => ELEMENT_CAPABILITIES[element.type], [element.type]);
 
@@ -251,7 +257,7 @@ function SelectionToolbarComponent({
           <button
             type="button"
             onClick={() => onPropertyChange("hidden", !frame.hidden)}
-            className={`flex items-center justify-center h-7 w-7 rounded-md transition-colors ${
+            className={`flex items-center justify-center h-7 w-7 rounded-md transition-colors cursor-pointer ${
               frame.hidden
                 ? "bg-[#7c3aed] text-white hover:bg-[#6d28d9]"
                 : "text-[#999] hover:text-[#e0e0e0] hover:bg-[#2a2a2a]"
@@ -265,13 +271,38 @@ function SelectionToolbarComponent({
             )}
           </button>
 
+          {(onAddToPresentation || onRemoveFromPresentation) && slideOrder && (
+            <>
+              <Separator orientation="vertical" className="h-6 bg-[#2a2a2a] mx-0.5" />
+              {slideOrder.includes(frame.id) && onRemoveFromPresentation ? (
+                <button
+                  type="button"
+                  onClick={() => onRemoveFromPresentation(frame.id)}
+                  className="flex items-center justify-center h-7 w-7 rounded-md text-[#7c3aed] hover:text-[#6d28d9] hover:bg-[#2a2a2a] transition-colors cursor-pointer"
+                  title="Remove from presentation"
+                >
+                  <Presentation className="h-4 w-4" />
+                </button>
+              ) : onAddToPresentation ? (
+                <button
+                  type="button"
+                  onClick={() => onAddToPresentation(frame.id)}
+                  className="flex items-center justify-center h-7 w-7 rounded-md text-[#999] hover:text-[#e0e0e0] hover:bg-[#2a2a2a] transition-colors cursor-pointer"
+                  title="Add to presentation"
+                >
+                  <Presentation className="h-4 w-4" />
+                </button>
+              ) : null}
+            </>
+          )}
+
           {onDissolveFrame && (
             <>
               <Separator orientation="vertical" className="h-6 bg-[#2a2a2a] mx-0.5" />
               <button
                 type="button"
                 onClick={() => onDissolveFrame(frame.id)}
-                className="flex items-center justify-center h-7 w-7 rounded-md text-[#999] hover:text-red-400 hover:bg-[#2a2a2a] transition-colors"
+                className="flex items-center justify-center h-7 w-7 rounded-md text-[#999] hover:text-red-400 hover:bg-[#2a2a2a] transition-colors cursor-pointer"
                 title="Delete frame only (keep contents)"
               >
                 <Trash2 className="h-4 w-4" />
@@ -349,5 +380,8 @@ export const SelectionToolbar = memo(
     prev.editingConnectorLabel === next.editingConnectorLabel &&
     prev.onPropertyChange === next.onPropertyChange &&
     prev.onStartEditingConnectorLabel === next.onStartEditingConnectorLabel &&
-    prev.onDissolveFrame === next.onDissolveFrame
+    prev.onDissolveFrame === next.onDissolveFrame &&
+    prev.slideOrder === next.slideOrder &&
+    prev.onAddToPresentation === next.onAddToPresentation &&
+    prev.onRemoveFromPresentation === next.onRemoveFromPresentation
 );
