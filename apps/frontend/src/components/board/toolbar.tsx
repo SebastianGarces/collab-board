@@ -1,7 +1,7 @@
 "use client";
 
 import { memo } from "react";
-import { ArrowRight, Circle, Copy, Hand, LayoutGrid, Minus, MousePointer2, Sparkles, Square, StickyNote, Trash2, Type } from "lucide-react";
+import { ArrowRight, Circle, Copy, Hand, LayoutGrid, Minus, MousePointer2, Redo2, Sparkles, Square, StickyNote, Trash2, Type, Undo2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -10,6 +10,10 @@ import { useCanvasStore } from "@/stores/canvas-store";
 export type ActiveTool = "pointer" | "hand" | "sticky-note" | "rectangle" | "circle" | "line" | "text" | "frame" | "connector";
 
 type ToolbarProps = {
+  onUndo: () => void;
+  onRedo: () => void;
+  canUndo: boolean;
+  canRedo: boolean;
   onDelete: () => void;
   onDuplicate: () => void;
   hasSelection: boolean;
@@ -29,12 +33,45 @@ const tools: { id: ActiveTool; icon: typeof MousePointer2; label: string }[] = [
   { id: "connector", icon: ArrowRight, label: "Connector" },
 ];
 
-function ToolbarComponent({ onDelete, onDuplicate, hasSelection, aiChatOpen, onAiChatToggle }: ToolbarProps) {
+function ToolbarComponent({ onUndo, onRedo, canUndo, canRedo, onDelete, onDuplicate, hasSelection, aiChatOpen, onAiChatToggle }: ToolbarProps) {
   const activeTool = useCanvasStore((s) => s.activeTool);
   const setActiveTool = useCanvasStore((s) => s.setActiveTool);
 
   return (
       <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1 bg-[#1a1a1a] border border-[#2a2a2a] rounded-xl px-2 py-1.5 shadow-lg">
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={onUndo}
+              disabled={!canUndo}
+              className="h-9 w-9 disabled:text-[#555]"
+            >
+              <Undo2 className="h-4 w-4" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="top" sideOffset={8}>
+            Undo (Cmd+Z)
+          </TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={onRedo}
+              disabled={!canRedo}
+              className="h-9 w-9 disabled:text-[#555]"
+            >
+              <Redo2 className="h-4 w-4" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="top" sideOffset={8}>
+            Redo (Cmd+Shift+Z)
+          </TooltipContent>
+        </Tooltip>
+        <div className="w-px h-6 bg-[#2a2a2a] mx-1" />
         {tools.map((tool) => {
           const Icon = tool.icon;
           const isActive = activeTool === tool.id;

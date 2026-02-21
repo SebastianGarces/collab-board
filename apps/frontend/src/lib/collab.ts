@@ -12,6 +12,7 @@ import {
   type PresenceState,
   type PresenceUser,
   WS_MESSAGE_AI,
+  WS_MESSAGE_AI_SYNC,
   WS_MESSAGE_PERF_PROBE,
   WS_MESSAGE_PRESENCE,
   WS_MESSAGE_SYNC
@@ -193,6 +194,9 @@ export function createCollabConnection(args: {
         } catch {
           args.onAiResponse?.({ type: "ai_response", id: "", text: "", toolCallSummary: [], error: "Failed to parse AI response" });
         }
+      } else if (messageType === WS_MESSAGE_AI_SYNC) {
+        const update = decoding.readVarUint8Array(decoder);
+        Y.applyUpdate(doc, update, "ai-mutation");
       }
     };
 

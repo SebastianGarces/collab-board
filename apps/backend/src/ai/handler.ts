@@ -68,7 +68,7 @@ export async function handleAiMessage(
 
     // Resume broadcasting first so the merged Yjs update reaches clients
     // right before (or effectively at the same time as) the chat response.
-    roomManager?.resumeBroadcast(roomId);
+    roomManager?.resumeBroadcastAsAi(roomId, socket);
 
     const response: AiChatResponse = {
       type: "ai_response",
@@ -86,7 +86,7 @@ export async function handleAiMessage(
   } catch (error) {
     console.error("[ai] command failed:", error);
     // Always resume broadcasting even on failure to avoid stuck rooms
-    roomManager?.resumeBroadcast(roomId);
+    roomManager?.resumeBroadcastAsAi(roomId, socket);
     const errorResponse: AiChatResponse = {
       type: "ai_response",
       id: request.id,

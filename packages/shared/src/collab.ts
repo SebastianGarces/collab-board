@@ -3,6 +3,7 @@ export const WS_MESSAGE_SYNC = 0;
 export const WS_MESSAGE_PERF_PROBE = 1;
 export const WS_MESSAGE_AI = 2;
 export const WS_MESSAGE_PRESENCE = 3;
+export const WS_MESSAGE_AI_SYNC = 4;
 
 /** AI chat message types sent over WS_MESSAGE_AI channel as JSON via lib0 varString. */
 

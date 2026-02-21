@@ -235,6 +235,9 @@ export default function CanvasPage() {
   const panToCreatedElementsRef = useRef<((ids: string[]) => void) | null>(null);
   const snapCalcRafRef = useRef<number | null>(null);
   const pendingSnapWorldRef = useRef<{ x: number; y: number; excludeIds: Set<string> } | null>(null);
+  const undoManagerRef = useRef<Y.UndoManager | null>(null);
+  const [canUndo, setCanUndo] = useState(false);
+  const [canRedo, setCanRedo] = useState(false);
 
   const handleStageRef = useCallback((stage: Konva.Stage | null) => {
     konvaStageRef.current = stage;
@@ -317,7 +320,26 @@ export default function CanvasPage() {
     connectionRef.current = connection;
     docRef.current = connection.doc;
     setYjsDoc(connection.doc);
+
+    const elementsMap = connection.doc.getMap("elements");
+    const undoManager = new Y.UndoManager(elementsMap, {
+      trackedOrigins: new Set(["local", "ai-mutation", "group-drag-move"]),
+      captureTimeout: 500,
+    });
+    undoManagerRef.current = undoManager;
+
+    const updateStackState = () => {
+      setCanUndo((undoManagerRef.current?.undoStack.length ?? 0) > 0);
+      setCanRedo((undoManagerRef.current?.redoStack.length ?? 0) > 0);
+    };
+    undoManager.on("stack-item-added", updateStackState);
+    undoManager.on("stack-item-popped", updateStackState);
+    undoManager.on("stack-cleared", updateStackState);
+    updateStackState();
+
     return () => {
+      undoManager.destroy();
+      undoManagerRef.current = null;
       connection.disconnect();
       connectionRef.current = null;
       docRef.current = null;
@@ -475,7 +497,7 @@ export default function CanvasPage() {
           doc.transact(() => {
             elementMap!.set("width", nextW);
             elementMap!.set("height", nextH);
-          });
+          }, "perf-test");
           await new Promise<void>((resolve) => {
             window.setTimeout(resolve, 16);
           });
@@ -514,19 +536,21 @@ export default function CanvasPage() {
       const elementMap = new Y.Map<unknown>();
 
       const color = STICKY_NOTE_COLORS[Math.floor(Math.random() * STICKY_NOTE_COLORS.length)];
-      elementMap.set("type", "sticky-note");
-      elementMap.set("id", id);
-      elementMap.set("x", worldX - DEFAULT_STICKY_NOTE_SIZE.width / 2);
-      elementMap.set("y", worldY - DEFAULT_STICKY_NOTE_SIZE.height / 2);
-      elementMap.set("width", DEFAULT_STICKY_NOTE_SIZE.width);
-      elementMap.set("height", DEFAULT_STICKY_NOTE_SIZE.height);
-      elementMap.set("text", "");
-      elementMap.set("color", color);
-      elementMap.set("fontSize", DEFAULT_STICKY_NOTE_FONT_SIZE);
-      elementMap.set("fontFamily", DEFAULT_FONT_FAMILY);
-      assignFrameIdToElement(elementMap, worldX, worldY);
+      doc.transact(() => {
+        elementMap.set("type", "sticky-note");
+        elementMap.set("id", id);
+        elementMap.set("x", worldX - DEFAULT_STICKY_NOTE_SIZE.width / 2);
+        elementMap.set("y", worldY - DEFAULT_STICKY_NOTE_SIZE.height / 2);
+        elementMap.set("width", DEFAULT_STICKY_NOTE_SIZE.width);
+        elementMap.set("height", DEFAULT_STICKY_NOTE_SIZE.height);
+        elementMap.set("text", "");
+        elementMap.set("color", color);
+        elementMap.set("fontSize", DEFAULT_STICKY_NOTE_FONT_SIZE);
+        elementMap.set("fontFamily", DEFAULT_FONT_FAMILY);
+        assignFrameIdToElement(elementMap, worldX, worldY);
+        elementsMap.set(id, elementMap);
+      }, "local");
 
-      elementsMap.set(id, elementMap);
       setSelectedElementIds(new Set([id]));
       setActiveTool("pointer");
     },
@@ -541,16 +565,18 @@ export default function CanvasPage() {
       const id = generateId();
       const elementMap = new Y.Map<unknown>();
 
-      elementMap.set("type", "rectangle");
-      elementMap.set("id", id);
-      elementMap.set("x", worldX);
-      elementMap.set("y", worldY);
-      elementMap.set("width", MIN_ELEMENT_SIZE);
-      elementMap.set("height", MIN_ELEMENT_SIZE);
-      elementMap.set("fill", "#3b82f6");
-      elementMap.set("stroke", "#2c61b8");
+      doc.transact(() => {
+        elementMap.set("type", "rectangle");
+        elementMap.set("id", id);
+        elementMap.set("x", worldX);
+        elementMap.set("y", worldY);
+        elementMap.set("width", MIN_ELEMENT_SIZE);
+        elementMap.set("height", MIN_ELEMENT_SIZE);
+        elementMap.set("fill", "#3b82f6");
+        elementMap.set("stroke", "#2c61b8");
+        elementsMap.set(id, elementMap);
+      }, "local");
 
-      elementsMap.set(id, elementMap);
       setSelectedElementIds(new Set([id]));
       return id;
     },
@@ -565,16 +591,18 @@ export default function CanvasPage() {
       const id = generateId();
       const elementMap = new Y.Map<unknown>();
 
-      elementMap.set("type", "circle");
-      elementMap.set("id", id);
-      elementMap.set("x", worldX);
-      elementMap.set("y", worldY);
-      elementMap.set("width", MIN_ELEMENT_SIZE);
-      elementMap.set("height", MIN_ELEMENT_SIZE);
-      elementMap.set("fill", "#8b5cf6");
-      elementMap.set("stroke", "#6845b8");
+      doc.transact(() => {
+        elementMap.set("type", "circle");
+        elementMap.set("id", id);
+        elementMap.set("x", worldX);
+        elementMap.set("y", worldY);
+        elementMap.set("width", MIN_ELEMENT_SIZE);
+        elementMap.set("height", MIN_ELEMENT_SIZE);
+        elementMap.set("fill", "#8b5cf6");
+        elementMap.set("stroke", "#6845b8");
+        elementsMap.set(id, elementMap);
+      }, "local");
 
-      elementsMap.set(id, elementMap);
       setSelectedElementIds(new Set([id]));
       return id;
     },
@@ -589,17 +617,19 @@ export default function CanvasPage() {
       const id = generateId();
       const elementMap = new Y.Map<unknown>();
 
-      elementMap.set("type", "line");
-      elementMap.set("id", id);
-      elementMap.set("x", worldX);
-      elementMap.set("y", worldY);
-      elementMap.set("width", 0);
-      elementMap.set("height", 0);
-      elementMap.set("stroke", "#f8fafc");
-      elementMap.set("strokeWidth", 3);
-      elementMap.set("points", [0, 0, 0, 0]);
+      doc.transact(() => {
+        elementMap.set("type", "line");
+        elementMap.set("id", id);
+        elementMap.set("x", worldX);
+        elementMap.set("y", worldY);
+        elementMap.set("width", 0);
+        elementMap.set("height", 0);
+        elementMap.set("stroke", "#f8fafc");
+        elementMap.set("strokeWidth", 3);
+        elementMap.set("points", [0, 0, 0, 0]);
+        elementsMap.set(id, elementMap);
+      }, "local");
 
-      elementsMap.set(id, elementMap);
       setSelectedElementIds(new Set([id]));
       return id;
     },
@@ -614,19 +644,21 @@ export default function CanvasPage() {
       const id = generateId();
       const elementMap = new Y.Map<unknown>();
 
-      elementMap.set("type", "text");
-      elementMap.set("id", id);
-      elementMap.set("x", worldX - DEFAULT_TEXT_SIZE.width / 2);
-      elementMap.set("y", worldY - DEFAULT_TEXT_SIZE.height / 2);
-      elementMap.set("width", DEFAULT_TEXT_SIZE.width);
-      elementMap.set("height", DEFAULT_TEXT_SIZE.height);
-      elementMap.set("text", "");
-      elementMap.set("fontSize", 18);
-      elementMap.set("fontFamily", DEFAULT_FONT_FAMILY);
-      elementMap.set("fill", "#f8fafc");
-      assignFrameIdToElement(elementMap, worldX, worldY);
+      doc.transact(() => {
+        elementMap.set("type", "text");
+        elementMap.set("id", id);
+        elementMap.set("x", worldX - DEFAULT_TEXT_SIZE.width / 2);
+        elementMap.set("y", worldY - DEFAULT_TEXT_SIZE.height / 2);
+        elementMap.set("width", DEFAULT_TEXT_SIZE.width);
+        elementMap.set("height", DEFAULT_TEXT_SIZE.height);
+        elementMap.set("text", "");
+        elementMap.set("fontSize", 18);
+        elementMap.set("fontFamily", DEFAULT_FONT_FAMILY);
+        elementMap.set("fill", "#f8fafc");
+        assignFrameIdToElement(elementMap, worldX, worldY);
+        elementsMap.set(id, elementMap);
+      }, "local");
 
-      elementsMap.set(id, elementMap);
       setSelectedElementIds(new Set([id]));
       setActiveTool("pointer");
       setEditingElementId(id);
@@ -659,19 +691,21 @@ export default function CanvasPage() {
         }
       });
 
-      elementMap.set("type", "frame");
-      elementMap.set("id", id);
-      elementMap.set("x", worldX);
-      elementMap.set("y", worldY);
-      elementMap.set("width", MIN_ELEMENT_SIZE);
-      elementMap.set("height", MIN_ELEMENT_SIZE);
-      elementMap.set("title", `Frame ${maxFrameNum + 1}`);
-      elementMap.set("fill", "#f5f5f5");
-      elementMap.set("stroke", "#d4d4d4");
-      elementMap.set("strokeStyle", "solid");
-      elementMap.set("hidden", false);
+      doc.transact(() => {
+        elementMap.set("type", "frame");
+        elementMap.set("id", id);
+        elementMap.set("x", worldX);
+        elementMap.set("y", worldY);
+        elementMap.set("width", MIN_ELEMENT_SIZE);
+        elementMap.set("height", MIN_ELEMENT_SIZE);
+        elementMap.set("title", `Frame ${maxFrameNum + 1}`);
+        elementMap.set("fill", "#f5f5f5");
+        elementMap.set("stroke", "#d4d4d4");
+        elementMap.set("strokeStyle", "solid");
+        elementMap.set("hidden", false);
+        elementsMap.set(id, elementMap);
+      }, "local");
 
-      elementsMap.set(id, elementMap);
       setSelectedElementIds(new Set([id]));
       return id;
     },
@@ -686,34 +720,36 @@ export default function CanvasPage() {
       const id = generateId();
       const elementMap = new Y.Map<unknown>();
 
-      elementMap.set("type", "connector");
-      elementMap.set("id", id);
-      elementMap.set("x", worldX);
-      elementMap.set("y", worldY);
-      elementMap.set("width", 0);
-      elementMap.set("height", 0);
-      elementMap.set("fromId", "");
-      elementMap.set("toId", "");
-      elementMap.set("fromAnchor", null);
-      elementMap.set("toAnchor", null);
-      elementMap.set("fromX", worldX);
-      elementMap.set("fromY", worldY);
-      elementMap.set("toX", worldX);
-      elementMap.set("toY", worldY);
-      elementMap.set("routingStyle", "curved");
-      elementMap.set("startArrow", "none");
-      elementMap.set("endArrow", "none");
-      elementMap.set("stroke", DEFAULT_CONNECTOR_STROKE);
-      elementMap.set("strokeWidth", DEFAULT_CONNECTOR_STROKE_WIDTH);
-      elementMap.set("dashStyle", "solid");
-      elementMap.set("labelText", "");
-      elementMap.set("labelFontSize", 14);
-      elementMap.set("labelFontFamily", DEFAULT_FONT_FAMILY);
-      elementMap.set("labelFill", "#f8fafc");
-      elementMap.set("labelBold", false);
-      elementMap.set("labelStrikethrough", false);
+      doc.transact(() => {
+        elementMap.set("type", "connector");
+        elementMap.set("id", id);
+        elementMap.set("x", worldX);
+        elementMap.set("y", worldY);
+        elementMap.set("width", 0);
+        elementMap.set("height", 0);
+        elementMap.set("fromId", "");
+        elementMap.set("toId", "");
+        elementMap.set("fromAnchor", null);
+        elementMap.set("toAnchor", null);
+        elementMap.set("fromX", worldX);
+        elementMap.set("fromY", worldY);
+        elementMap.set("toX", worldX);
+        elementMap.set("toY", worldY);
+        elementMap.set("routingStyle", "curved");
+        elementMap.set("startArrow", "none");
+        elementMap.set("endArrow", "none");
+        elementMap.set("stroke", DEFAULT_CONNECTOR_STROKE);
+        elementMap.set("strokeWidth", DEFAULT_CONNECTOR_STROKE_WIDTH);
+        elementMap.set("dashStyle", "solid");
+        elementMap.set("labelText", "");
+        elementMap.set("labelFontSize", 14);
+        elementMap.set("labelFontFamily", DEFAULT_FONT_FAMILY);
+        elementMap.set("labelFill", "#f8fafc");
+        elementMap.set("labelBold", false);
+        elementMap.set("labelStrikethrough", false);
+        elementsMap.set(id, elementMap);
+      }, "local");
 
-      elementsMap.set(id, elementMap);
       setSelectedElementIds(new Set([id]));
       return id;
     },
@@ -748,7 +784,7 @@ export default function CanvasPage() {
         elementMap.set("y", Math.min(fy, ty));
         elementMap.set("width", Math.max(Math.abs(tx - fx), 1));
         elementMap.set("height", Math.max(Math.abs(ty - fy), 1));
-      });
+      }, "local");
     },
     []
   );
@@ -791,7 +827,7 @@ export default function CanvasPage() {
         elementMap.set("y", Math.min(fy, ty));
         elementMap.set("width", Math.max(Math.abs(tx - fx), 1));
         elementMap.set("height", Math.max(Math.abs(ty - fy), 1));
-      });
+      }, "local");
     },
     [elements]
   );
@@ -851,7 +887,7 @@ export default function CanvasPage() {
             childMap.set("toY", ((childMap.get("toY") as number) ?? 0) + deltaY);
           }
         }
-      });
+      }, "local");
     } else {
       const w = (elementMap.get("width") as number) ?? 0;
       const h = (elementMap.get("height") as number) ?? 0;
@@ -884,7 +920,7 @@ export default function CanvasPage() {
         elementMap.set("x", x);
         elementMap.set("y", y);
         elementMap.set("frameId", targetFrameId);
-      });
+      }, "local");
     }
 
     groupDragOriginsRef.current = null;
@@ -964,7 +1000,7 @@ export default function CanvasPage() {
           }
         }
       }
-    });
+    }, "local");
 
     groupDragOriginsRef.current = null;
     groupDragConnectorOriginsRef.current = null;
@@ -986,7 +1022,7 @@ export default function CanvasPage() {
     doc.transact(() => {
       elementMap.set("x", pending.x);
       elementMap.set("y", pending.y);
-    }, "element-drag-move");
+    }, "local");
   }, []);
 
   const onDragElementMove = useCallback(
@@ -1092,7 +1128,7 @@ export default function CanvasPage() {
       elementMap.set("y", pending.box.y);
       elementMap.set("width", pending.box.width);
       elementMap.set("height", pending.box.height);
-    });
+    }, "local");
   }, []);
 
   const resizeElement = useCallback(
@@ -1118,7 +1154,7 @@ export default function CanvasPage() {
     if (!elementMap) return;
     doc.transact(() => {
       elementMap.set("rotation", pending.rotation);
-    });
+    }, "local");
   }, []);
 
   const rotateElement = useCallback(
@@ -1203,7 +1239,7 @@ export default function CanvasPage() {
         elementMap.set("width", maxPx - minPx);
         elementMap.set("height", maxPy - minPy);
         elementMap.set("points", normPoints);
-      });
+      }, "local");
     },
     []
   );
@@ -1230,7 +1266,7 @@ export default function CanvasPage() {
       for (const childId of childIds) {
         elementsMap.delete(childId);
       }
-    });
+    }, "local");
 
     const prev = useCanvasStore.getState().selectedElementIds;
     const idsToRemove = new Set([id, ...childIds]);
@@ -1254,7 +1290,7 @@ export default function CanvasPage() {
         }
       });
       elementsMap.delete(id);
-    });
+    }, "local");
 
     clearSelection();
   }, [clearSelection]);
@@ -1289,7 +1325,7 @@ export default function CanvasPage() {
       for (const id of allIds) {
         elementsMap.delete(id);
       }
-    });
+    }, "local");
     clearSelection();
   }, [clearSelection]);
 
@@ -1393,7 +1429,7 @@ export default function CanvasPage() {
 
         newIds.push(newId);
       }
-    });
+    }, "local");
 
     // Select the newly duplicated elements
     setSelectedElementIds(new Set(newIds));
@@ -1492,7 +1528,7 @@ export default function CanvasPage() {
               elementsMap.set(newId, elementMap);
               newIds.push(newId);
             }
-          });
+          }, "local");
           
           // Select the pasted elements
           setSelectedElementIds(new Set(newIds));
@@ -1620,7 +1656,7 @@ export default function CanvasPage() {
     if (!elementMap) return;
     doc.transact(() => {
       elementMap.set(key, value);
-    });
+    }, "local");
   }, []);
 
   const startEditing = useCallback(
@@ -1673,7 +1709,7 @@ export default function CanvasPage() {
 
       doc.transact(() => {
         elementMap.set(key, value);
-      });
+      }, "local");
     },
     [editingElementId, editingConnectorLabel]
   );
@@ -1735,6 +1771,14 @@ export default function CanvasPage() {
     }
   }, [editingElementId]);
 
+  const undo = useCallback(() => {
+    undoManagerRef.current?.undo();
+  }, []);
+
+  const redo = useCallback(() => {
+    undoManagerRef.current?.redo();
+  }, []);
+
   // Keyboard shortcuts via TanStack Hotkeys
   // Tool shortcuts (single keys) -- won't fire when Mod/Ctrl is held
   useHotkey("V", () => setActiveTool("pointer"), { enabled: !editingElementId });
@@ -1761,6 +1805,8 @@ export default function CanvasPage() {
       duplicateSelectedElements();
     }
   }, { ignoreInputs: true, enabled: !aiChatOpen });
+  useHotkey("Mod+Z", () => undo(), { enabled: !editingElementId });
+  useHotkey("Mod+Shift+Z", () => redo(), { enabled: !editingElementId });
 
   // Escape: commit edit if editing, otherwise clear selection and reset tool
   useHotkey("Escape", () => {
@@ -2033,7 +2079,7 @@ export default function CanvasPage() {
                 elementMap.set("fromAnchor", snap.anchorIndex);
                 elementMap.set("fromX", snap.anchor.x);
                 elementMap.set("fromY", snap.anchor.y);
-              });
+              }, "local");
             }
           }
         }
@@ -2120,7 +2166,7 @@ export default function CanvasPage() {
                 start.x - minX, start.y - minY,
                 world.x - minX, world.y - minY,
               ]);
-            });
+            }, "local");
           }
         }
       } else {
@@ -2608,6 +2654,10 @@ export default function CanvasPage() {
 
         {/* Toolbar */}
         <Toolbar
+          onUndo={undo}
+          onRedo={redo}
+          canUndo={canUndo}
+          canRedo={canRedo}
           onDelete={deleteSelectedElements}
           onDuplicate={duplicateSelectedElements}
           hasSelection={selectedElementIds.size > 0}

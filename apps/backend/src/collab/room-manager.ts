@@ -3,7 +3,7 @@ import * as encoding from "lib0/encoding";
 import * as syncProtocol from "y-protocols/sync";
 import * as Y from "yjs";
 
-import { WS_MESSAGE_AI, WS_MESSAGE_PERF_PROBE, WS_MESSAGE_PRESENCE, WS_MESSAGE_SYNC } from "@collab/shared/collab";
+import { WS_MESSAGE_AI, WS_MESSAGE_AI_SYNC, WS_MESSAGE_PERF_PROBE, WS_MESSAGE_PRESENCE, WS_MESSAGE_SYNC } from "@collab/shared/collab";
 
 export type SocketLike = {
   send: (data: Uint8Array) => void;
@@ -392,6 +392,41 @@ export class RoomManager {
     const payload = encoding.toUint8Array(encoder);
 
     for (const client of room.clients) {
+      this.observeOutbound(payload.byteLength);
+      client.send(payload);
+    }
+  }
+
+  /**
+   * Resume broadcasting and flush all queued updates. Sends WS_MESSAGE_AI_SYNC
+   * only to the requesting client (so their UndoManager tracks it); sends
+   * normal WS_MESSAGE_SYNC to all other clients (so they get the update but
+   * cannot undo it).
+   */
+  resumeBroadcastAsAi(roomId: string, originSocket: SocketLike): void {
+    const room = this.rooms.get(roomId);
+    if (!room) return;
+    room.broadcastPaused = false;
+
+    if (room.pendingUpdates.length === 0) return;
+
+    const merged = Y.mergeUpdates(room.pendingUpdates);
+    room.pendingUpdates.length = 0;
+
+    // AI_SYNC for the requesting client (UndoManager tracks it)
+    const aiEncoder = encoding.createEncoder();
+    encoding.writeVarUint(aiEncoder, WS_MESSAGE_AI_SYNC);
+    encoding.writeVarUint8Array(aiEncoder, merged);
+    const aiPayload = encoding.toUint8Array(aiEncoder);
+
+    // Normal SYNC for everyone else (UndoManager ignores it)
+    const syncEncoder = encoding.createEncoder();
+    encoding.writeVarUint(syncEncoder, WS_MESSAGE_SYNC);
+    syncProtocol.writeUpdate(syncEncoder, merged);
+    const syncPayload = encoding.toUint8Array(syncEncoder);
+
+    for (const client of room.clients) {
+      const payload = client === originSocket ? aiPayload : syncPayload;
       this.observeOutbound(payload.byteLength);
       client.send(payload);
     }

@@ -572,10 +572,11 @@ export const BoardCanvas = memo(function BoardCanvas({
     setDropTargetFrameId(null);
     const el = elementsByIdRef.current.get(draggedId);
     if (!el) return;
-    const deltaX = newX - el.x;
-    const deltaY = newY - el.y;
     const store = useCanvasStore.getState();
     if (store.selectedElementIds.size > 1 && store.selectedElementIds.has(draggedId)) {
+      const gd = store.groupDrag;
+      const deltaX = gd ? newX - gd.startX : newX - el.x;
+      const deltaY = gd ? newY - gd.startY : newY - el.y;
       onDragSelectedElementsRef.current?.(deltaX, deltaY);
     } else {
       onDragElementRef.current?.(draggedId, newX, newY);
