@@ -4,7 +4,7 @@ import type Konva from "konva";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Circle as KonvaCircle, Layer, Rect, Stage } from "react-konva";
 
-import type { BoardElement, FrameElement } from "@collab/shared/collab";
+import type { BoardElement, ConnectorElement, FrameElement, LineElement } from "@collab/shared/collab";
 
 import { findFrameAtPoint, getElementAABB, getFrameChildIds } from "@/lib/element-utils";
 import type { SpatialIndex } from "@/lib/spatial-index";
@@ -12,9 +12,10 @@ import { useCanvasStore } from "@/stores/canvas-store";
 import { CircleContent } from "./circle-element";
 import { ConnectorContent } from "./connector-element";
 import { ConnectorEndpointHandles } from "./connector-endpoint-handles";
+import { isPointOnConnectorPath } from "./connector-utils";
 import { FrameContent } from "./frame-element";
 import { InteractiveShape } from "./interactive-shape";
-import { LineContent } from "./line-element";
+import { isPointOnLinePath, LineContent } from "./line-element";
 import { LineEndpointHandles } from "./line-endpoint-handles";
 import { RectangleContent } from "./rectangle-element";
 import type { ElementBox } from "./shape-transform";
@@ -122,6 +123,8 @@ type ActiveElementNodeProps = {
   onConnectorEndpointDrag: (endpoint: "from" | "to", wx: number, wy: number, elementId: string) => void;
   onConnectorEndpointDragEnd: (endpoint: "from" | "to", wx: number, wy: number, elementId: string) => void;
   onConnectorLabelClick: (elementId: string) => void;
+  isSpacebarPressedRef?: React.RefObject<boolean>;
+  isSpacebarPressed?: boolean;
 };
 
 function ActiveElementNodeComponent({
@@ -151,6 +154,8 @@ function ActiveElementNodeComponent({
   onConnectorEndpointDrag,
   onConnectorEndpointDragEnd,
   onConnectorLabelClick,
+  isSpacebarPressedRef,
+  isSpacebarPressed = false,
 }: ActiveElementNodeProps) {
   const isLine = el.type === "line";
   const isConnector = el.type === "connector";
@@ -177,6 +182,8 @@ function ActiveElementNodeComponent({
       hideSelectionOutline={isLine || isConnector}
       getDragChildIds={isFrame ? getDragChildIds : undefined}
       onDragPositionUpdate={!isFrame ? onDragPositionUpdate : undefined}
+      isSpacebarPressedRef={isSpacebarPressedRef}
+      isSpacebarPressed={isSpacebarPressed}
     >
       {el.type === "sticky-note" && (
         <StickyNote element={el} isEditing={el.id === editingElementId} />
@@ -231,6 +238,7 @@ const ActiveElementNode = memo(ActiveElementNodeComponent, (prev, next) => {
   if (prev.isSelected !== next.isSelected) return false;
   if (prev.multiSelected !== next.multiSelected) return false;
   if (prev.draggable !== next.draggable) return false;
+  if (prev.isSpacebarPressed !== next.isSpacebarPressed) return false;
   // Editing-related props only matter for the element being edited
   const prevIsEditing = prev.editingElementId === prev.element.id;
   const nextIsEditing = next.editingElementId === next.element.id;
@@ -276,6 +284,8 @@ type BoardCanvasProps = {
   getFrameChildIdsFn?: (frameId: string) => string[];
   onStageRef?: (stage: Konva.Stage | null) => void;
   spatialIndex?: SpatialIndex;
+  isSpacebarPressedRef?: React.RefObject<boolean>;
+  isSpacebarPressed?: boolean;
 };
 
 export const BoardCanvas = memo(function BoardCanvas({
@@ -309,6 +319,8 @@ export const BoardCanvas = memo(function BoardCanvas({
   getFrameChildIdsFn,
   onStageRef,
   spatialIndex,
+  isSpacebarPressedRef,
+  isSpacebarPressed = false,
 }: BoardCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const localStageRef = useRef<Konva.Stage | null>(null);
@@ -688,6 +700,7 @@ export const BoardCanvas = memo(function BoardCanvas({
 
   const handleStagePointerDown = useCallback((e: Konva.KonvaEventObject<PointerEvent>) => {
     if (!isPointerModeRef.current) return;
+    if (isSpacebarPressedRef?.current) return;
     const stage = e.target.getStage();
     if (!stage) return;
 
@@ -701,7 +714,14 @@ export const BoardCanvas = memo(function BoardCanvas({
 
       const idx = spatialIndexRef.current;
       if (idx) {
-        const hits = idx.queryPointHit(worldX, worldY);
+        const rawHits = idx.queryPointHit(worldX, worldY);
+        const hits = rawHits.filter((hit) => {
+          if (hit.type === "connector")
+            return isPointOnConnectorPath({ x: worldX, y: worldY }, hit as ConnectorElement, elementsByIdRef.current);
+          if (hit.type === "line")
+            return isPointOnLinePath({ x: worldX, y: worldY }, hit as LineElement);
+          return true;
+        });
         if (hits.length > 0) {
           const sorted = sortedElementsRef.current;
           let topHit = hits[0];
@@ -854,6 +874,8 @@ export const BoardCanvas = memo(function BoardCanvas({
                   onConnectorEndpointDrag={handleConnectorEndpointDrag}
                   onConnectorEndpointDragEnd={handleConnectorEndpointDragEnd}
                   onConnectorLabelClick={handleConnectorLabelClick}
+                  isSpacebarPressedRef={isSpacebarPressedRef}
+                  isSpacebarPressed={isSpacebarPressed}
                 />
               );
             })}

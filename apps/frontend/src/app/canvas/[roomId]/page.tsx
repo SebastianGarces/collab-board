@@ -2470,6 +2470,8 @@ export default function CanvasPage() {
           connectorSnapAnchors={connectorSnapAnchors}
           connectorSnapTarget={connectorSnapTarget}
           spatialIndex={spatialIndexRef.current}
+          isSpacebarPressedRef={isSpacebarPressedRef}
+          isSpacebarPressed={isSpacebarPressed}
         />
 
         {/* Remote cursor overlay */}

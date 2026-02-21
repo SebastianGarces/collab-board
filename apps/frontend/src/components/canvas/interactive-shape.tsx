@@ -41,6 +41,8 @@ type InteractiveShapeProps = {
   onGroupDragStart?: () => void;
   onGroupDragMove?: (dx: number, dy: number) => void;
   onDragPositionUpdate?: (id: string, x: number, y: number, width: number, height: number) => void;
+  isSpacebarPressedRef?: React.RefObject<boolean>;
+  isSpacebarPressed?: boolean;
   children: ReactNode;
 };
 
@@ -63,6 +65,8 @@ function InteractiveShapeComponent({
   onGroupDragStart,
   onGroupDragMove,
   onDragPositionUpdate,
+  isSpacebarPressedRef,
+  isSpacebarPressed = false,
   children,
 }: InteractiveShapeProps) {
   const resizeSessionRef = useRef<ResizeSession | null>(null);
@@ -87,7 +91,8 @@ function InteractiveShapeComponent({
     })
   );
 
-  const effectiveDraggable = draggable && !isResizing && !isRotating;
+  const effectiveDraggable =
+    draggable && !isResizing && !isRotating && !isSpacebarPressed;
 
   const dragEndOverrideRef = useRef<{ x: number; y: number } | null>(null);
 
@@ -199,10 +204,14 @@ function InteractiveShapeComponent({
       rotation={element.rotation ?? 0}
       draggable={effectiveDraggable}
       onClick={(e) => {
+        if (isSpacebarPressedRef?.current) return;
         const shiftKey = e.evt?.shiftKey ?? false;
         onSelect(element.id, shiftKey);
       }}
-      onTap={() => onSelect(element.id, false)}
+      onTap={() => {
+        if (isSpacebarPressedRef?.current) return;
+        onSelect(element.id, false);
+      }}
       onDblClick={onDblClick ? () => onDblClick(element.id) : undefined}
       onDblTap={onDblClick ? () => onDblClick(element.id) : undefined}
       onDragStart={(e) => {

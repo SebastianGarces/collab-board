@@ -247,6 +247,39 @@ export function computePath(
   return [from.x, from.y, cp1.x, cp1.y, cp2.x, cp2.y, to.x, to.y];
 }
 
+const BEZIER_SAMPLES = 50;
+
+/**
+ * Precise hit-test: returns true when `point` is within `padding` world-pixels
+ * of the connector's cubic bezier path.  Used to refine the coarse AABB check
+ * from the spatial index so that the rectangular bounding box doesn't swallow
+ * clicks meant for elements underneath.
+ */
+export function isPointOnConnectorPath(
+  point: Point,
+  connector: ConnectorElement,
+  elementsById: Map<string, BoardElement>,
+  padding = CONNECTOR_HIT_PADDING,
+): boolean {
+  const { from, to } = resolveEndpoints(connector, elementsById);
+  const p = computePath(from, to, connector.fromAnchor, connector.toAnchor);
+  if (p.length !== 8) return false;
+
+  const paddingSq = padding * padding;
+
+  for (let i = 0; i <= BEZIER_SAMPLES; i++) {
+    const t = i / BEZIER_SAMPLES;
+    const mt = 1 - t;
+    const bx = mt * mt * mt * p[0] + 3 * mt * mt * t * p[2] + 3 * mt * t * t * p[4] + t * t * t * p[6];
+    const by = mt * mt * mt * p[1] + 3 * mt * mt * t * p[3] + 3 * mt * t * t * p[5] + t * t * t * p[7];
+    const dx = point.x - bx;
+    const dy = point.y - by;
+    if (dx * dx + dy * dy <= paddingSq) return true;
+  }
+
+  return false;
+}
+
 /**
  * Compute the midpoint of a curved path (used for label positioning).
  * For a cubic bezier, evaluates at t=0.5.
