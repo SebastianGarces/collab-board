@@ -1,7 +1,7 @@
 "use client";
 
 import { memo } from "react";
-import { ArrowRight, Circle, Copy, Hand, LayoutGrid, Minus, MousePointer2, Redo2, Sparkles, Square, StickyNote, Trash2, Type, Undo2 } from "lucide-react";
+import { ArrowRight, Circle, Copy, Hand, LayoutGrid, Minus, MousePointer2, Presentation, Redo2, Sparkles, Square, StickyNote, Trash2, Type, Undo2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -19,6 +19,8 @@ type ToolbarProps = {
   hasSelection: boolean;
   aiChatOpen: boolean;
   onAiChatToggle: () => void;
+  presentationOpen: boolean;
+  onPresentationToggle: () => void;
 };
 
 const tools: { id: ActiveTool; icon: typeof MousePointer2; label: string }[] = [
@@ -33,7 +35,7 @@ const tools: { id: ActiveTool; icon: typeof MousePointer2; label: string }[] = [
   { id: "connector", icon: ArrowRight, label: "Connector" },
 ];
 
-function ToolbarComponent({ onUndo, onRedo, canUndo, canRedo, onDelete, onDuplicate, hasSelection, aiChatOpen, onAiChatToggle }: ToolbarProps) {
+function ToolbarComponent({ onUndo, onRedo, canUndo, canRedo, onDelete, onDuplicate, hasSelection, aiChatOpen, onAiChatToggle, presentationOpen, onPresentationToggle }: ToolbarProps) {
   const activeTool = useCanvasStore((s) => s.activeTool);
   const setActiveTool = useCanvasStore((s) => s.setActiveTool);
 
@@ -140,6 +142,22 @@ function ToolbarComponent({ onUndo, onRedo, canUndo, canRedo, onDelete, onDuplic
           </TooltipTrigger>
           <TooltipContent side="top" sideOffset={8}>
             AI Assistant
+          </TooltipContent>
+        </Tooltip>
+        <div className="w-px h-6 bg-[#2a2a2a] mx-1" />
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={onPresentationToggle}
+              className="h-9 w-9 cursor-pointer"
+            >
+              <Presentation className={`h-4 w-4 ${presentationOpen ? "text-[#3b82f6]" : "text-[#7b8ca8]"}`} />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="top" sideOffset={8}>
+            Presentation
           </TooltipContent>
         </Tooltip>
       </div>

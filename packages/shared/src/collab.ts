@@ -50,6 +50,10 @@ export type PresenceUser = {
 export type PresenceState = {
   user: PresenceUser;
   cursor: Cursor | null;
+  presenting?: {
+    slideIndex: number;
+    slideOrder: string[];
+  };
 };
 
 export type PerfProbeKind = "cursor" | "object";

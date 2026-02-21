@@ -165,3 +165,12 @@ Append-only log. Never edit past entries. If a decision is superseded, add a new
 **Context:** gpt-4.1-nano cannot reliably generate 200+ element JSON arrays in a single tool call — it truncates or ignores the requested count (e.g. creates 6 instead of 200). Even capable models would need ~5000 output tokens for 200 elements, blowing the 2000ms latency budget.
 **Decision:** Add a `bulkCreateElements` tool that accepts a compact template spec (type, count, columns, gap, colors, textPattern, frameTitle) and expands it server-side into individual Yjs elements. The model outputs ~50 tokens instead of ~5000. System prompt rule 14 directs the model to use this tool for 7+ elements of the same type.
 **Consequences:** Bulk creation is deterministic and fast (server-side expansion). The model only needs to specify the pattern, not enumerate elements. For mixed-type batches or small counts (<7), `batchCreateElements` remains the right tool.
+
+---
+
+### ADR-018: Presentation mode — Yjs slideOrder + presence protocol
+**Date:** 2026-02-21
+**Status:** accepted
+**Context:** Need presentation mode that turns frames into an ordered slide deck with smooth camera animation and collaborative following (one user presents, others follow).
+**Decision:** Store slide order in `doc.getArray("slideOrder")` (Y.Array of frame IDs). Extend presence payload with optional `presenting: { slideIndex, slideOrder }`. Presenter broadcasts via presence; followers auto-sync to presenter's slide. Camera animation uses `applyCameraDirect` during animation (60fps), `setCameraState` only at end. Panel on left, overlay fullscreen with prev/next/exit.
+**Consequences:** No schema change. Frame deletion must clean up slideOrder. Presence payload grows slightly when presenting. Backend forwards presence as-is.

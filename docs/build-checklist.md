@@ -1,6 +1,6 @@
 # CollabBoard Build Checklist
 
-**Last updated**: February 20, 2026
+**Last updated**: February 21, 2026
 
 This checklist tracks what has been implemented against the full spec in `collab-board.md`, informed by the architecture decisions in `pre-search.md`. Items are organized by dependency layer so you can work top-to-bottom without getting blocked.
 
@@ -90,6 +90,7 @@ Layer 4 (final — depends on everything above) ✓ ALL DONE
 | 15 | Operations — Delete | [x] Done | Delete/Backspace key, toolbar trash button |
 | 16 | Operations — Duplicate | [x] Done | Ctrl/Cmd+D, toolbar button, +20px offset |
 | 17 | Operations — Copy/paste | [x] Done | Ctrl/Cmd+C/V, clipboard API, viewport-centered paste, plain text creates sticky note |
+| 18 | Presentation mode | [x] Done | Slide deck from frames, Yjs slideOrder, camera animation, collaborative following via presence |
 
 ---
 

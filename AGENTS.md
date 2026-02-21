@@ -76,6 +76,10 @@ When the user says **"review this trace `<traceId>`"** (or similar phrasing refe
    - **Multi-step behavior:** Was it necessary? Could it have been done in fewer steps?
 4. Present findings and suggest specific system prompt improvements with before/after diffs when applicable.
 
+## UI Conventions
+
+- **Clickable elements:** When adding or modifying elements that are clickable (buttons, links, interactive controls), always add `cursor-pointer` so the pointer cursor is shown on hover. This applies to both native `<button>` elements and button-like components (e.g. `Button` from shadcn).
+
 ## Required Behavior
 
 - Prefer running the smallest relevant perf command after each meaningful batch of edits.

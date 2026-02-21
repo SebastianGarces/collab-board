@@ -2,7 +2,7 @@
 
 import { useHotkey } from "@tanstack/react-hotkeys";
 import type Konva from "konva";
-import { ArrowLeft, Check, Keyboard, Share2 } from "lucide-react";
+import { ArrowLeft, Check, Keyboard, Presentation, Share2 } from "lucide-react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
@@ -11,6 +11,8 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as Y from "yjs";
 
 import { AiChatPanel } from "@/components/board/ai-chat-panel";
+import { PresentationOverlay } from "@/components/board/presentation-overlay";
+import { PresentationPanel } from "@/components/board/presentation-panel";
 import { SelectionToolbar } from "@/components/board/selection-toolbar";
 import { Toolbar } from "@/components/board/toolbar";
 import { measureLabelWidth } from "@/components/canvas/connector-element";
@@ -33,6 +35,7 @@ import { Kbd, KbdGroup } from "@/components/ui/kbd";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useYjsElements } from "@/hooks/use-yjs-elements";
 import { authClient } from "@/lib/auth-client";
+import { animateCamera, frameToCamera } from "@/lib/camera-animation";
 import { createCollabConnection, type Camera, type ConnectionState } from "@/lib/collab";
 import { deserializeElement, findFrameAtPoint, getBoundingBox, serializeElement } from "@/lib/element-utils";
 import { createPerfProbeCollector } from "@/lib/perf-probe";
@@ -230,6 +233,21 @@ export default function CanvasPage() {
   const konvaStageRef = useRef<Konva.Stage | null>(null);
   const [isDrawing, setIsDrawing] = useState(false);
   const [aiChatOpen, setAiChatOpen] = useState(false);
+  const [presentationPanelOpen, setPresentationPanelOpen] = useState(false);
+  const [presentationMode, setPresentationMode] = useState(false);
+  const [currentSlide, setCurrentSlide] = useState(0);
+  const [presentationSlides, setPresentationSlides] = useState<string[]>([]);
+  const [isFollowing, setIsFollowing] = useState(false);
+  const [activePresenter, setActivePresenter] = useState<{
+    clientId: number;
+    userName: string;
+    slideIndex: number;
+    slideOrder: string[];
+  } | null>(null);
+  const [presentationEnded, setPresentationEnded] = useState(false);
+  const [amIPresenter, setAmIPresenter] = useState(false);
+  const [slideOrderForBadges, setSlideOrderForBadges] = useState<string[]>([]);
+  const cancelAnimationRef = useRef<(() => void) | null>(null);
   const [shareCopied, setShareCopied] = useState(false);
   const aiChatHandlerRef = useRef<((response: AiChatResponse) => void) | null>(null);
   const panToCreatedElementsRef = useRef<((ids: string[]) => void) | null>(null);
@@ -285,14 +303,25 @@ export default function CanvasPage() {
       onStatesChange(states, localClientId) {
         const cursors: RemoteCursor[] = [];
         const users: PresenceUser[] = [];
+        let presenter: { clientId: number; userName: string; slideIndex: number; slideOrder: string[] } | null = null;
         states.forEach((state, clientId) => {
           if (!state?.user) return;
           users.push(state.user);
           if (clientId === localClientId) return;
-          if (!state.cursor) return;
-          cursors.push({ clientId, cursor: state.cursor, user: state.user });
+          if (state.cursor) {
+            cursors.push({ clientId, cursor: state.cursor, user: state.user });
+          }
+          if (state.presenting && (!presenter || clientId < presenter.clientId)) {
+            presenter = {
+              clientId,
+              userName: state.user.name,
+              slideIndex: state.presenting.slideIndex,
+              slideOrder: state.presenting.slideOrder,
+            };
+          }
         });
         setOnlineUsers(users);
+        setActivePresenter(presenter);
         pendingRemoteCursorsRef.current = cursors;
         if (remoteCursorRafRef.current === null) {
           remoteCursorRafRef.current = requestAnimationFrame(() => {
@@ -346,6 +375,32 @@ export default function CanvasPage() {
       setYjsDoc(null);
     };
   }, [currentUser, roomId, perfEnabled]);
+
+  useEffect(() => {
+    if (!presentationPanelOpen || !yjsDoc) return;
+    const slideOrder = yjsDoc.getArray<string>("slideOrder");
+    const update = () => setSlideOrderForBadges(slideOrder.toArray());
+    update();
+    slideOrder.observe(update);
+    return () => slideOrder.unobserve(update);
+  }, [presentationPanelOpen, yjsDoc]);
+
+  useEffect(() => {
+    if (!presentationMode || !isFollowing || !activePresenter) return;
+    goToSlide(activePresenter.slideIndex, activePresenter.slideOrder, false);
+  }, [presentationMode, isFollowing, activePresenter?.clientId, activePresenter?.slideIndex]);
+
+  useEffect(() => {
+    if (!presentationMode || activePresenter !== null) return;
+    if (isFollowing) {
+      setPresentationEnded(true);
+      const t = setTimeout(() => {
+        setPresentationEnded(false);
+        setIsFollowing(false);
+      }, 3000);
+      return () => clearTimeout(t);
+    }
+  }, [presentationMode, activePresenter, isFollowing]);
 
   const rawElements = useYjsElements(yjsDoc);
 
@@ -1266,6 +1321,13 @@ export default function CanvasPage() {
       for (const childId of childIds) {
         elementsMap.delete(childId);
       }
+      const slideOrder = doc.getArray<string>("slideOrder");
+      const idsToRemove = [id, ...childIds];
+      for (let i = slideOrder.length - 1; i >= 0; i--) {
+        if (idsToRemove.includes(slideOrder.get(i))) {
+          slideOrder.delete(i, 1);
+        }
+      }
     }, "local");
 
     const prev = useCanvasStore.getState().selectedElementIds;
@@ -1324,6 +1386,13 @@ export default function CanvasPage() {
     doc.transact(() => {
       for (const id of allIds) {
         elementsMap.delete(id);
+      }
+      const slideOrder = doc.getArray<string>("slideOrder");
+      const idsSet = new Set(allIds);
+      for (let i = slideOrder.length - 1; i >= 0; i--) {
+        if (idsSet.has(slideOrder.get(i))) {
+          slideOrder.delete(i, 1);
+        }
       }
     }, "local");
     clearSelection();
@@ -1647,6 +1716,116 @@ export default function CanvasPage() {
   }, [applyCameraDirect, setCameraState]);
 
   panToCreatedElementsRef.current = panToCreatedElements;
+
+  const goToSlide = useCallback(
+    (index: number, slides: string[], isPresenter: boolean) => {
+      const surface = surfaceRef.current;
+      const connection = connectionRef.current;
+      if (!surface || !connection) return;
+
+      const slideCount = slides.length;
+      if (slideCount === 0) return;
+
+      const clampedIndex = ((index % slideCount) + slideCount) % slideCount;
+      let targetIndex = clampedIndex;
+      let frameId = slides[targetIndex];
+      let frame = elements.find((el) => el.id === frameId && el.type === "frame") as FrameElement | undefined;
+
+      if (!frame) {
+        for (let i = 0; i < slideCount; i++) {
+          const idx = (clampedIndex + i) % slideCount;
+          const fid = slides[idx];
+          const f = elements.find((el) => el.id === fid && el.type === "frame");
+          if (f) {
+            targetIndex = idx;
+            frameId = fid;
+            frame = f as FrameElement;
+            break;
+          }
+        }
+        if (!frame) return;
+      }
+
+      cancelAnimationRef.current?.();
+      const viewport = surface.getBoundingClientRect();
+      const targetCam = frameToCamera(frame, viewport);
+      const fromCam = cameraRef.current;
+
+      cancelAnimationRef.current = animateCamera(
+        fromCam,
+        targetCam,
+        applyCameraDirect,
+        setCameraState,
+        600
+      );
+
+      setCurrentSlide(targetIndex);
+      if (isPresenter) {
+        connection.setPresenting({ slideIndex: targetIndex, slideOrder: slides });
+      }
+    },
+    [elements, applyCameraDirect, setCameraState]
+  );
+
+  const startPresentation = useCallback(
+    (slideOrder: string[]) => {
+      if (slideOrder.length === 0 && !activePresenter) return;
+      setPresentationMode(true);
+      setPresentationPanelOpen(false);
+
+      const presenter = activePresenter;
+      if (presenter) {
+        setPresentationSlides(presenter.slideOrder);
+        setCurrentSlide(presenter.slideIndex);
+        setIsFollowing(true);
+        setAmIPresenter(false);
+        setPresentationEnded(false);
+        requestAnimationFrame(() => {
+          goToSlide(presenter.slideIndex, presenter.slideOrder, false);
+        });
+      } else {
+        setPresentationSlides(slideOrder);
+        setCurrentSlide(0);
+        setAmIPresenter(true);
+        const connection = connectionRef.current;
+        if (connection) {
+          connection.setPresenting({ slideIndex: 0, slideOrder });
+        }
+        requestAnimationFrame(() => {
+          goToSlide(0, slideOrder, true);
+        });
+      }
+    },
+    [goToSlide, activePresenter]
+  );
+
+  const exitPresentation = useCallback(() => {
+    setPresentationMode(false);
+    setAmIPresenter(false);
+    cancelAnimationRef.current?.();
+    cancelAnimationRef.current = null;
+
+    const connection = connectionRef.current;
+    if (connection) {
+      connection.setPresenting(null);
+    }
+  }, []);
+
+  const presentationNext = useCallback(() => {
+    setIsFollowing(false);
+    goToSlide(currentSlide + 1, presentationSlides, amIPresenter);
+  }, [currentSlide, presentationSlides, amIPresenter, goToSlide]);
+
+  const presentationPrev = useCallback(() => {
+    setIsFollowing(false);
+    goToSlide(currentSlide - 1, presentationSlides, amIPresenter);
+  }, [currentSlide, presentationSlides, amIPresenter, goToSlide]);
+
+  const handleReattach = useCallback(() => {
+    if (!activePresenter) return;
+    setIsFollowing(true);
+    goToSlide(activePresenter.slideIndex, activePresenter.slideOrder, false);
+  }, [activePresenter, goToSlide]);
 
   const updateElementProperty = useCallback((id: string, key: string, value: unknown) => {
     const doc = docRef.current;
@@ -1994,6 +2173,7 @@ export default function CanvasPage() {
 
   // --- Overlay pointer handlers (used for creation tools and non-pointer modes) ---
   const onOverlayPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (presentationMode) return;
     if (perfEnabled) {
       perfCollectorRef.current.markInput();
     }
@@ -2227,6 +2407,7 @@ export default function CanvasPage() {
 
   // --- Section-level handlers (always active, for wheel zoom and space-pan in pointer mode) ---
   const onSectionPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (presentationMode) return;
     if (
       (isPointerMode && (event.button === 1 || isSpacebarPressedRef.current)) ||
       activeTool === "hand"
@@ -2241,7 +2422,7 @@ export default function CanvasPage() {
 
   const onSectionPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
     pointerPositionRef.current = { x: event.clientX, y: event.clientY };
-    
+    if (presentationMode) return;
     if (perfEnabled) {
       perfCollectorRef.current.markInput();
     }
@@ -2273,6 +2454,7 @@ export default function CanvasPage() {
   }, []);
 
   const onWheel = (event: ReactWheelEvent<HTMLDivElement>) => {
+    if (presentationMode) return;
     if (perfEnabled) {
       perfCollectorRef.current.markInput();
     }
@@ -2387,8 +2569,286 @@ export default function CanvasPage() {
       ? "⌘"
       : "Ctrl";
 
+  const sectionContent = (
+    <>
+      {/* Dot grid background */}
+      <div
+        ref={dotGridRef}
+        className="absolute inset-0 bg-[radial-gradient(circle,rgba(255,255,255,0.1)_1px,transparent_1px)]"
+        style={{
+          backgroundPosition: `${camera.x}px ${camera.y}px`,
+          backgroundSize: `${24 * camera.scale}px ${24 * camera.scale}px`,
+        }}
+      />
+
+      {/* Konva canvas for board elements */}
+      <BoardCanvas
+        camera={camera}
+        syntheticObjectCount={syntheticObjectCount}
+        elements={elements}
+        getFrameChildIdsFn={getFrameChildIdsFromYjs}
+        onStageRef={handleStageRef}
+        onSelectElement={selectElement}
+        onDragElementStart={handleDragElementStart}
+        onDragElementMove={onDragElementMove}
+        onDragElement={handleDragElement}
+        onDragSelectedElements={handleDragSelectedElements}
+        onGroupDragStart={onGroupDragStart}
+        onGroupDragMove={onGroupDragMove}
+        onResizeElement={resizeElement}
+        onRotateElement={rotateElement}
+        onRotateCursorChange={setRotationCursor}
+        onDblClickElement={startEditing}
+        editingElementId={editingElementId}
+        editingConnectorLabel={editingConnectorLabel}
+        onLineEndpointDrag={moveLineEndpoint}
+        onLineEndpointDragEnd={moveLineEndpoint}
+        onConnectorEndpointDrag={handleConnectorEndpointDrag}
+        onConnectorEndpointDragEnd={handleConnectorEndpointDragEnd}
+        onConnectorLabelClick={handleConnectorLabelClick}
+        onStagePointerDown={handleStagePointerDown}
+        onStagePointerMove={handleStagePointerMove}
+        onStagePointerUp={handleStagePointerUp}
+        marqueeRect={marqueeRect}
+        connectorSnapAnchors={connectorSnapAnchors}
+        connectorSnapTarget={connectorSnapTarget}
+        spatialIndex={spatialIndexRef.current}
+        isSpacebarPressedRef={isSpacebarPressedRef}
+        isSpacebarPressed={isSpacebarPressed}
+      />
+
+      {/* Remote cursor overlay */}
+      <RemoteCursorOverlay remoteCursors={remoteCursors} camera={camera} />
+
+      {/* Selection toolbar - floating above selected element */}
+      {!presentationMode && selectedElement && (!editingElementId || editingConnectorLabel) && !isDraggingElement && (
+        <SelectionToolbar
+          element={selectedElement}
+          onPropertyChange={handleSelectedElementPropertyChange}
+          camera={camera}
+          editingConnectorLabel={editingConnectorLabel}
+          onStartEditingConnectorLabel={
+            selectedElement.type === "connector" ? handleStartEditingConnectorLabel : undefined
+          }
+          onDissolveFrame={
+            selectedElement.type === "frame" ? dissolveFrame : undefined
+          }
+        />
+      )}
+
+      {/* Text editing overlay */}
+      {!presentationMode && editingElement && editOverlayStyle && (
+        <div
+          className="absolute z-30"
+          style={editOverlayStyle}
+        >
+          {editingElement.type === "connector" && editingConnectorLabel ? (
+            <input
+              ref={textareaRef as unknown as React.RefObject<HTMLInputElement>}
+              type="text"
+              value={editText}
+              onChange={(e) => handleEditTextChange(e.target.value)}
+              onBlur={handleConnectorLabelBlur}
+              onKeyDown={(e) => {
+                if (e.key === "Escape" || e.key === "Enter") {
+                  commitEdit();
+                }
+                e.stopPropagation();
+              }}
+              className="ring-1 ring-[#60a5fa] rounded bg-[#1a1a1a]/90 outline-none text-center"
+              style={{
+                display: "block",
+                fontFamily: editingElement.labelFontFamily,
+                fontSize: editingElement.labelFontSize,
+                fontWeight: editingElement.labelBold ? "bold" : "normal",
+                textDecoration: editingElement.labelStrikethrough ? "line-through" : "none",
+                color: editingElement.labelFill,
+                padding: "2px 8px",
+                minWidth: 60,
+                width: `${Math.max(60, measureLabelWidth(editText || " ", editingElement.labelFontSize, editingElement.labelFontFamily, editingElement.labelBold) + 24)}px`,
+              }}
+            />
+          ) : editingElement.type === "frame" ? (
+            <input
+              ref={textareaRef as unknown as React.RefObject<HTMLInputElement>}
+              type="text"
+              value={editText}
+              onChange={(e) => handleEditTextChange(e.target.value)}
+              onBlur={commitEdit}
+              onKeyDown={(e) => {
+                if (e.key === "Escape" || e.key === "Enter") {
+                  commitEdit();
+                }
+                e.stopPropagation();
+              }}
+              size={Math.max(1, editText.length)}
+              className="ring-1 ring-[#60a5fa] rounded bg-white outline-none"
+              style={{
+                display: "block",
+                fontFamily: "system-ui, sans-serif",
+                fontSize: 13,
+                fontWeight: 500,
+                lineHeight: "19px",
+                height: 19,
+                padding: "0 8px",
+                color: "#525252",
+                minWidth: 40,
+                width: `${Math.max(40, editText.length * 8 + 20)}px`,
+              }}
+            />
+          ) : (
+            <textarea
+              ref={textareaRef}
+              value={editText}
+              onChange={(e) => handleEditTextChange(e.target.value)}
+              onBlur={commitEdit}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") {
+                  commitEdit();
+                }
+                e.stopPropagation();
+              }}
+              className="w-full h-full resize-none border-none ring-2 ring-[#60a5fa] rounded bg-transparent outline-none"
+              style={{
+                fontFamily: (editingElement.type === "sticky-note" || editingElement.type === "text") ? editingElement.fontFamily : "system-ui, sans-serif",
+                fontSize: (editingElement.type === "sticky-note" || editingElement.type === "text") ? editingElement.fontSize : 14,
+                lineHeight: 1,
+                padding: editingElement.type === "text" ? 0 : 12,
+                background: editingElement.type === "sticky-note" ? editingElement.color : "transparent",
+                color: editingElement.type === "text" ? editingElement.fill : "#1a1a1a",
+              }}
+            />
+          )}
+        </div>
+      )}
+
+      {/* Interaction overlay - captures pointer events for pan/zoom and creation tools.
+          In pointer mode, this overlay is pointer-events-none so Konva can handle
+          element drag/click. Pan via shift+drag works through the overlay in non-pointer modes. */}
+      <div
+        className={`absolute inset-0 z-20 ${
+          presentationMode
+            ? "pointer-events-none"
+            : isPointerMode && !isPanning
+              ? "pointer-events-none"
+              : isHandMode
+                ? isPanning
+                  ? "cursor-grabbing"
+                  : "cursor-grab"
+                : "cursor-crosshair"
+        }`}
+        onPointerDown={onOverlayPointerDown}
+        onPointerMove={onOverlayPointerMove}
+        onPointerUp={onOverlayPointerUp}
+        onPointerLeave={onOverlayPointerLeave}
+      />
+
+      {/* AI Chat Panel */}
+      {!presentationMode && (
+      <AiChatPanel
+        open={aiChatOpen}
+        onClose={() => setAiChatOpen(false)}
+        onSendMessage={sendAiMessage}
+        ref={aiChatHandlerRef}
+      />
+      )}
+
+      {/* Presentation Panel */}
+      {!presentationMode && (
+      <PresentationPanel
+        open={presentationPanelOpen}
+        onClose={() => setPresentationPanelOpen(false)}
+        elements={elements}
+        doc={yjsDoc}
+        onStartPresentation={startPresentation}
+        activePresenter={activePresenter}
+      />
+      )}
+
+      {/* Presentation Overlay */}
+      {presentationMode && (
+      <PresentationOverlay
+        slides={presentationSlides}
+        currentSlide={currentSlide}
+        onNext={presentationNext}
+        onPrev={presentationPrev}
+        onExit={exitPresentation}
+        isFollowing={isFollowing}
+        presenterName={activePresenter?.userName}
+        onReattach={handleReattach}
+        onStopFollowing={() => setIsFollowing(false)}
+        presentationEnded={presentationEnded}
+      />
+      )}
+
+      {/* Slide number badges (when panel open, not in presentation) */}
+      {presentationPanelOpen && !presentationMode && slideOrderForBadges.map((frameId, index) => {
+        const frame = elements.find((el) => el.id === frameId && el.type === "frame");
+        if (!frame) return null;
+        const screenX = frame.x * camera.scale + camera.x;
+        const screenY = frame.y * camera.scale + camera.y;
+        return (
+          <div
+            key={frameId}
+            className="absolute z-30 pointer-events-none"
+            style={{
+              left: screenX - 12,
+              top: screenY - 12,
+              transform: "translate(-50%, -50%)",
+            }}
+          >
+            <div className="w-6 h-6 rounded-full bg-blue-500 text-white text-xs font-bold flex items-center justify-center shadow-md">
+              {index + 1}
+            </div>
+          </div>
+        );
+      })}
+
+      {/* Toolbar */}
+      {!presentationMode && (
+      <Toolbar
+        onUndo={undo}
+        onRedo={redo}
+        canUndo={canUndo}
+        canRedo={canRedo}
+        onDelete={deleteSelectedElements}
+        onDuplicate={duplicateSelectedElements}
+        hasSelection={selectedElementIds.size > 0}
+        aiChatOpen={aiChatOpen}
+        onAiChatToggle={() => setAiChatOpen((prev) => !prev)}
+        presentationOpen={presentationPanelOpen}
+        onPresentationToggle={() => setPresentationPanelOpen((prev) => !prev)}
+      />
+      )}
+
+      {/* Custom rotation cursor */}
+      {rotationCursor && (
+        <RotationCursor
+          pointerRef={pointerPositionRef}
+          corner={rotationCursor.corner}
+          elementRotation={rotationCursor.elementRotation}
+        />
+      )}
+
+      {/* Debug metrics overlay (dev only) */}
+      {process.env.NODE_ENV === "development" && (
+        <DebugMetrics
+          camera={camera}
+          elements={elements}
+          isPanning={isPanning}
+          isDrawing={isDrawing}
+          editingElementId={editingElementId}
+          pointerPositionRef={pointerPositionRef}
+          surfaceRef={surfaceRef}
+          stageRef={konvaStageRef}
+        />
+      )}
+    </>
+  );
+
   return (
     <main className="min-h-screen grid grid-rows-[auto_1fr_auto]">
+      {!presentationMode && (
       <header className="px-4 py-2.5 border-b border-[#2a2a2a] bg-[#1a1a1a] flex justify-between items-center gap-4">
         <div className="flex items-center gap-3">
           <Link
@@ -2456,239 +2916,70 @@ export default function CanvasPage() {
           </div>
         </div>
       </header>
+      )}
 
-      <section
-        ref={surfaceRef}
-        className="relative overflow-hidden bg-[#121212] touch-none"
-        style={{
-          cursor: rotationCursor
-            ? "none"
-            : isPanning
-              ? "grabbing"
-              : isSpacebarPressed || isHandMode
-                ? "grab"
-                : undefined,
-        }}
-        onPointerDown={onSectionPointerDown}
-        onPointerMove={onSectionPointerMove}
-        onPointerUp={onSectionPointerUp}
-        onWheel={onWheel}
-      >
-        {/* Dot grid background */}
-        <div
-          ref={dotGridRef}
-          className="absolute inset-0 bg-[radial-gradient(circle,rgba(255,255,255,0.1)_1px,transparent_1px)]"
-          style={{
-            backgroundPosition: `${camera.x}px ${camera.y}px`,
-            backgroundSize: `${24 * camera.scale}px ${24 * camera.scale}px`,
-          }}
-        />
-
-        {/* Konva canvas for board elements */}
-        <BoardCanvas
-          camera={camera}
-          syntheticObjectCount={syntheticObjectCount}
-          elements={elements}
-          getFrameChildIdsFn={getFrameChildIdsFromYjs}
-          onStageRef={handleStageRef}
-          onSelectElement={selectElement}
-          onDragElementStart={handleDragElementStart}
-          onDragElementMove={onDragElementMove}
-          onDragElement={handleDragElement}
-          onDragSelectedElements={handleDragSelectedElements}
-          onGroupDragStart={onGroupDragStart}
-          onGroupDragMove={onGroupDragMove}
-          onResizeElement={resizeElement}
-          onRotateElement={rotateElement}
-          onRotateCursorChange={setRotationCursor}
-          onDblClickElement={startEditing}
-          editingElementId={editingElementId}
-          editingConnectorLabel={editingConnectorLabel}
-          onLineEndpointDrag={moveLineEndpoint}
-          onLineEndpointDragEnd={moveLineEndpoint}
-          onConnectorEndpointDrag={handleConnectorEndpointDrag}
-          onConnectorEndpointDragEnd={handleConnectorEndpointDragEnd}
-          onConnectorLabelClick={handleConnectorLabelClick}
-          onStagePointerDown={handleStagePointerDown}
-          onStagePointerMove={handleStagePointerMove}
-          onStagePointerUp={handleStagePointerUp}
-          marqueeRect={marqueeRect}
-          connectorSnapAnchors={connectorSnapAnchors}
-          connectorSnapTarget={connectorSnapTarget}
-          spatialIndex={spatialIndexRef.current}
-          isSpacebarPressedRef={isSpacebarPressedRef}
-          isSpacebarPressed={isSpacebarPressed}
-        />
-
-        {/* Remote cursor overlay */}
-        <RemoteCursorOverlay remoteCursors={remoteCursors} camera={camera} />
-
-        {/* Selection toolbar - floating above selected element */}
-        {selectedElement && (!editingElementId || editingConnectorLabel) && !isDraggingElement && (
-          <SelectionToolbar
-            element={selectedElement}
-            onPropertyChange={handleSelectedElementPropertyChange}
-            camera={camera}
-            editingConnectorLabel={editingConnectorLabel}
-            onStartEditingConnectorLabel={
-              selectedElement.type === "connector" ? handleStartEditingConnectorLabel : undefined
-            }
-            onDissolveFrame={
-              selectedElement.type === "frame" ? dissolveFrame : undefined
-            }
-          />
-        )}
-
-        {/* Text editing overlay */}
-        {editingElement && editOverlayStyle && (
-          <div
-            className="absolute z-30"
-            style={editOverlayStyle}
+      {/* Banner when someone else is presenting - visible without opening the panel */}
+      {!presentationMode && activePresenter && (
+        <div className="absolute top-14 left-1/2 -translate-x-1/2 z-40 flex items-center gap-3 px-4 py-2 rounded-lg bg-[#2a2a2a] border border-[#3a3a3a] shadow-lg">
+          <span className="text-sm text-[#e0e0e0]">
+            {activePresenter.userName} is presenting
+          </span>
+          <Button
+            size="sm"
+            onClick={() => startPresentation(activePresenter!.slideOrder)}
+            className="cursor-pointer gap-1.5"
           >
-            {editingElement.type === "connector" && editingConnectorLabel ? (
-              <input
-                ref={textareaRef as unknown as React.RefObject<HTMLInputElement>}
-                type="text"
-                value={editText}
-                onChange={(e) => handleEditTextChange(e.target.value)}
-                onBlur={handleConnectorLabelBlur}
-                onKeyDown={(e) => {
-                  if (e.key === "Escape" || e.key === "Enter") {
-                    commitEdit();
-                  }
-                  e.stopPropagation();
-                }}
-                className="ring-1 ring-[#60a5fa] rounded bg-[#1a1a1a]/90 outline-none text-center"
-                style={{
-                  display: "block",
-                  fontFamily: editingElement.labelFontFamily,
-                  fontSize: editingElement.labelFontSize,
-                  fontWeight: editingElement.labelBold ? "bold" : "normal",
-                  textDecoration: editingElement.labelStrikethrough ? "line-through" : "none",
-                  color: editingElement.labelFill,
-                  padding: "2px 8px",
-                  minWidth: 60,
-                  width: `${Math.max(60, measureLabelWidth(editText || " ", editingElement.labelFontSize, editingElement.labelFontFamily, editingElement.labelBold) + 24)}px`,
-                }}
-              />
-            ) : editingElement.type === "frame" ? (
-              <input
-                ref={textareaRef as unknown as React.RefObject<HTMLInputElement>}
-                type="text"
-                value={editText}
-                onChange={(e) => handleEditTextChange(e.target.value)}
-                onBlur={commitEdit}
-                onKeyDown={(e) => {
-                  if (e.key === "Escape" || e.key === "Enter") {
-                    commitEdit();
-                  }
-                  e.stopPropagation();
-                }}
-                size={Math.max(1, editText.length)}
-                className="ring-1 ring-[#60a5fa] rounded bg-white outline-none"
-                style={{
-                  display: "block",
-                  fontFamily: "system-ui, sans-serif",
-                  fontSize: 13,
-                  fontWeight: 500,
-                  lineHeight: "19px",
-                  height: 19,
-                  padding: "0 8px",
-                  color: "#525252",
-                  minWidth: 40,
-                  width: `${Math.max(40, editText.length * 8 + 20)}px`,
-                }}
-              />
-            ) : (
-              <textarea
-                ref={textareaRef}
-                value={editText}
-                onChange={(e) => handleEditTextChange(e.target.value)}
-                onBlur={commitEdit}
-                onKeyDown={(e) => {
-                  if (e.key === "Escape") {
-                    commitEdit();
-                  }
-                  e.stopPropagation();
-                }}
-                className="w-full h-full resize-none border-none ring-2 ring-[#60a5fa] rounded bg-transparent outline-none"
-                style={{
-                  fontFamily: (editingElement.type === "sticky-note" || editingElement.type === "text") ? editingElement.fontFamily : "system-ui, sans-serif",
-                  fontSize: (editingElement.type === "sticky-note" || editingElement.type === "text") ? editingElement.fontSize : 14,
-                  lineHeight: 1,
-                  padding: editingElement.type === "text" ? 0 : 12,
-                  background: editingElement.type === "sticky-note" ? editingElement.color : "transparent",
-                  color: editingElement.type === "text" ? editingElement.fill : "#1a1a1a",
-                }}
-              />
-            )}
-          </div>
-        )}
+            <Presentation className="h-4 w-4" />
+            Join presentation
+          </Button>
+        </div>
+      )}
 
-        {/* Interaction overlay - captures pointer events for pan/zoom and creation tools.
-            In pointer mode, this overlay is pointer-events-none so Konva can handle
-            element drag/click. Pan via shift+drag works through the overlay in non-pointer modes. */}
-        <div
-          className={`absolute inset-0 z-20 ${
-            isPointerMode && !isPanning
-              ? "pointer-events-none"
-              : isHandMode
-                ? isPanning
-                  ? "cursor-grabbing"
-                  : "cursor-grab"
-                : "cursor-crosshair"
-          }`}
-          onPointerDown={onOverlayPointerDown}
-          onPointerMove={onOverlayPointerMove}
-          onPointerUp={onOverlayPointerUp}
-          onPointerLeave={onOverlayPointerLeave}
-        />
+      {presentationMode ? (
+        <div className="fixed inset-0 z-0 w-screen h-screen">
+          <section
+            ref={surfaceRef}
+            className="relative w-full h-full overflow-hidden bg-[#121212] touch-none"
+            style={{
+              cursor: rotationCursor
+                ? "none"
+                : isPanning
+                  ? "grabbing"
+                  : isSpacebarPressed || isHandMode
+                    ? "grab"
+                    : undefined,
+            }}
+            onPointerDown={onSectionPointerDown}
+            onPointerMove={onSectionPointerMove}
+            onPointerUp={onSectionPointerUp}
+            onWheel={onWheel}
+          >
+            {sectionContent}
+          </section>
+        </div>
+      ) : (
+        <section
+          ref={surfaceRef}
+          className="relative overflow-hidden bg-[#121212] touch-none"
+          style={{
+            cursor: rotationCursor
+              ? "none"
+              : isPanning
+                ? "grabbing"
+                : isSpacebarPressed || isHandMode
+                  ? "grab"
+                  : undefined,
+          }}
+          onPointerDown={onSectionPointerDown}
+          onPointerMove={onSectionPointerMove}
+          onPointerUp={onSectionPointerUp}
+          onWheel={onWheel}
+        >
+          {sectionContent}
+        </section>
+      )}
 
-        {/* AI Chat Panel */}
-        <AiChatPanel
-          open={aiChatOpen}
-          onClose={() => setAiChatOpen(false)}
-          onSendMessage={sendAiMessage}
-          ref={aiChatHandlerRef}
-        />
-
-        {/* Toolbar */}
-        <Toolbar
-          onUndo={undo}
-          onRedo={redo}
-          canUndo={canUndo}
-          canRedo={canRedo}
-          onDelete={deleteSelectedElements}
-          onDuplicate={duplicateSelectedElements}
-          hasSelection={selectedElementIds.size > 0}
-          aiChatOpen={aiChatOpen}
-          onAiChatToggle={() => setAiChatOpen((prev) => !prev)}
-        />
-
-        {/* Custom rotation cursor */}
-        {rotationCursor && (
-          <RotationCursor
-            pointerRef={pointerPositionRef}
-            corner={rotationCursor.corner}
-            elementRotation={rotationCursor.elementRotation}
-          />
-        )}
-
-        {/* Debug metrics overlay (dev only) */}
-        {process.env.NODE_ENV === "development" && (
-          <DebugMetrics
-            camera={camera}
-            elements={elements}
-            isPanning={isPanning}
-            isDrawing={isDrawing}
-            editingElementId={editingElementId}
-            pointerPositionRef={pointerPositionRef}
-            surfaceRef={surfaceRef}
-            stageRef={konvaStageRef}
-          />
-        )}
-      </section>
-
+      {!presentationMode && (
       <footer className="px-4 py-2.5 border-t border-[#2a2a2a] bg-[#1a1a1a] text-[#999] text-sm flex items-center justify-between gap-4">
         <span className="text-[#666]">Scroll to zoom · <Kbd>Space</Kbd> or <Kbd>H</Kbd> to pan</span>
         <Dialog>
@@ -2765,6 +3056,7 @@ export default function CanvasPage() {
           </DialogContent>
         </Dialog>
       </footer>
+      )}
     </main>
   );
 }

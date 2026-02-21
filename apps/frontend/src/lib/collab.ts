@@ -61,6 +61,7 @@ export function createCollabConnection(args: {
 
   // Lightweight presence state (not in Yjs)
   const remotePresence = new Map<number, PresenceState>();
+  let presentingRef: { slideIndex: number; slideOrder: string[] } | null = null;
 
   const send = (payload: Uint8Array) => {
     if (ws?.readyState === WebSocket.OPEN) {
@@ -88,6 +89,7 @@ export function createCollabConnection(args: {
       clientId: doc.clientID,
       user: args.user,
       cursor,
+      ...(presentingRef && { presenting: presentingRef }),
     });
     const encoder = encoding.createEncoder();
     encoding.writeVarUint(encoder, WS_MESSAGE_PRESENCE);
@@ -97,7 +99,11 @@ export function createCollabConnection(args: {
 
   const emitStates = () => {
     const states = new Map<number, PresenceState>();
-    states.set(doc.clientID, { user: args.user, cursor: null });
+    states.set(doc.clientID, {
+      user: args.user,
+      cursor: null,
+      ...(presentingRef && { presenting: presentingRef }),
+    });
     for (const [clientId, state] of remotePresence) {
       states.set(clientId, state);
     }
@@ -160,6 +166,7 @@ export function createCollabConnection(args: {
             clientId: number;
             user: PresenceUser;
             cursor: { x: number; y: number } | null;
+            presenting?: { slideIndex: number; slideOrder: string[] };
             removed?: boolean;
           };
           if (payload.clientId === doc.clientID) return;
@@ -169,6 +176,7 @@ export function createCollabConnection(args: {
             remotePresence.set(payload.clientId, {
               user: payload.user,
               cursor: payload.cursor,
+              ...(payload.presenting && { presenting: payload.presenting }),
             });
           }
           emitStates();
@@ -251,6 +259,11 @@ export function createCollabConnection(args: {
     }
   };
 
+  const setPresenting = (presenting: { slideIndex: number; slideOrder: string[] } | null) => {
+    presentingRef = presenting;
+    publishPresence(pendingCursor ?? null);
+  };
+
   const sendAiMessage = (
     prompt: string,
     conversationHistory?: AiConversationMessage[],
@@ -287,6 +300,7 @@ export function createCollabConnection(args: {
 
   const disconnect = () => {
     disposed = true;
+    presentingRef = null;
     if (cursorRafId !== null) {
       cancelAnimationFrame(cursorRafId);
       cursorRafId = null;
@@ -309,5 +323,5 @@ export function createCollabConnection(args: {
     args.onConnectionStateChange?.("disconnected");
   };
 
-  return { doc, disconnect, setCursor, sendPerfProbe, sendAiMessage };
+  return { doc, disconnect, setCursor, setPresenting, sendPerfProbe, sendAiMessage };
 }
