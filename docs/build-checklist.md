@@ -43,12 +43,12 @@ Layer 3 (depends on Layer 2) ✓ ALL DONE
 ├── AI Agent: complex multi-step commands ← DONE (maxSteps=10)
 └── AI Agent: layout commands ← DONE (batch tools + system prompt)
 
-Layer 4 (final — depends on everything above)
+Layer 4 (final — depends on everything above) ✓ ALL DONE
 ├── AI Development Log ← DONE
 ├── AI Cost Analysis ← DONE
-├── Demo Video (3-5 min)
+├── Demo Video (3-5 min) ← DONE
 ├── Deployed application (public URL) ← DONE
-└── Social Post (X or LinkedIn)
+└── Social Post (X or LinkedIn) ← DONE
 ```
 
 ---
@@ -172,15 +172,12 @@ Layer 4 (final — depends on everything above)
 | 2 | Pre-Search document | [x] Done | `docs/pre-search.md` |
 | 3 | AI Development Log (1-page) | [x] Done | `docs/ai-development-log.md` -- tools/workflow, MCP, prompts, code analysis, learnings |
 | 4 | AI Cost Analysis (dev spend + projections) | [x] Done | `docs/ai-cost-analysis.md` + `bun run ai:cost-analysis` (LangSmith), per-model projections with gpt-5.1 as production model |
-| 5 | Demo Video (3-5 min) | [ ] Not done | |
+| 5 | Demo Video (3-5 min) | [x] Done | [Loom Recording](https://www.loom.com/share/9727c803804843b4bd51ddd33b177a05) |
 | 6 | Deployed application (publicly accessible) | [x] Done | Railway, `gsgarces.dev` (frontend) + `api.gsgarces.dev` (backend) |
-| 7 | Social Post (X or LinkedIn) | [ ] Not done | |
+| 7 | Social Post (X or LinkedIn) | [x] Done | [X Post](https://x.com/gsgarces/status/2024997613876003000) |
 
 ---
 
-## Remaining Work
+## Status
 
-Layers 0-3 are complete. Layer 4 remaining:
-
-1. **Demo Video** — 3-5 min recording covering real-time collaboration, AI commands, architecture
-2. **Social Post** — share on X or LinkedIn tagging @GauntletAI
+All layers (0-4) are complete. All submission deliverables are done.

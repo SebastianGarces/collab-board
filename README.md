@@ -14,7 +14,8 @@ A real-time collaborative infinite whiteboard with an AI agent that manipulates 
 | Pre-Search Document | [docs/pre-search.md](docs/pre-search.md) |
 | AI Development Log | [docs/ai-development-log.md](docs/ai-development-log.md) |
 | AI Cost Analysis | [docs/ai-cost-analysis.md](docs/ai-cost-analysis.md) |
-| Demo Video | _TBD_ |
+| Demo Video | [Loom Recording](https://www.loom.com/share/9727c803804843b4bd51ddd33b177a05) |
+| Social Post | [X Post](https://x.com/gsgarces/status/2024997613876003000) |
 | Build Checklist | [docs/build-checklist.md](docs/build-checklist.md) |
 
 ---
