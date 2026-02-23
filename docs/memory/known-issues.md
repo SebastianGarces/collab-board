@@ -85,6 +85,6 @@ Check here before investigating a problem -- it may already be documented.
 ### canvasLongFramesPerMinute exceeds soft budget
 **Date found:** 2026-02-18
 **Symptom:** Frontend perf test reports a soft budget warning: `canvasLongFramesPerMinute: 233.8 > 120`. The hard budget is not breached and the test passes, but the metric is nearly 2x the soft target.
-**Cause:** Not yet investigated. Likely caused by heavy per-frame work during the 5-user concurrent stress test (Yjs observation RAF flushes, Konva re-renders, or React reconciliation under high object/cursor update rates).
-**Workaround:** None needed immediately -- the test passes. Worth profiling to identify the hot path before adding more real-time features that increase per-frame work.
-**Status:** open
+**Cause:** High-frequency interaction updates crossed React/Zustand/renderer boundaries too often (multiple `renderer.setState` effects, per-element live-override writes during group drag, and full spatial-index sync on every Yjs change). Renderer also performed avoidable hot-path allocations.
+**Fix:** Batched renderer snapshot sync per RAF, batched live drag overrides into one renderer call, moved drag deltas out of Zustand write path, added incremental Yjs metadata (`changedIds`, `orderChanged`) and switched spatial index to targeted update/remove when possible, plus renderer hot-path simplifications (single override lookup and cached dot-grid raster per camera key).
+**Status:** resolved (2026-02-22)

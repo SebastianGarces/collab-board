@@ -12,6 +12,49 @@ import {
     DEFAULT_STICKY_NOTE_FONT_SIZE,
 } from "@collab/shared/collab";
 
+type YjsElementsSnapshot = {
+  elements: BoardElement[];
+  changedIds: ReadonlySet<string>;
+  orderChanged: boolean;
+  version: number;
+};
+
+function valuesEqual(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (Array.isArray(a) && Array.isArray(b)) {
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) {
+      if (!valuesEqual(a[i], b[i])) return false;
+    }
+    return true;
+  }
+  // Handle plain objects
+  if (a != null && b != null && typeof a === "object" && typeof b === "object") {
+    const aObj = a as Record<string, unknown>;
+    const bObj = b as Record<string, unknown>;
+    const keys = Object.keys(aObj);
+    if (keys.length !== Object.keys(bObj).length) return false;
+    for (const key of keys) {
+      if (aObj[key] !== bObj[key]) return false;
+    }
+    return true;
+  }
+  return false;
+}
+
+function elementsEqual(a: BoardElement, b: BoardElement): boolean {
+  if (a.id !== b.id || a.type !== b.type) return false;
+  const aObj = a as unknown as Record<string, unknown>;
+  const bObj = b as unknown as Record<string, unknown>;
+  const aKeys = Object.keys(aObj);
+  const bKeys = Object.keys(bObj);
+  if (aKeys.length !== bKeys.length) return false;
+  for (const key of aKeys) {
+    if (!valuesEqual(aObj[key], bObj[key])) return false;
+  }
+  return true;
+}
+
 function toFiniteNumber(value: unknown, fallback: number): number {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return fallback;
@@ -214,14 +257,19 @@ function yMapToElement(id: string, map: Y.Map<unknown>): BoardElement | null {
   return null;
 }
 
-export function useYjsElements(doc: Y.Doc | null): BoardElement[] {
-  const [elements, setElements] = useState<BoardElement[]>([]);
+export function useYjsElements(doc: Y.Doc | null): YjsElementsSnapshot {
+  const [snapshot, setSnapshot] = useState<YjsElementsSnapshot>({
+    elements: [],
+    changedIds: new Set<string>(),
+    orderChanged: false,
+    version: 0,
+  });
   const orderRef = useRef<string[]>([]);
   const prevCountRef = useRef(0);
 
   useEffect(() => {
     if (!doc) {
-      setElements([]);
+      setSnapshot({ elements: [], changedIds: new Set<string>(), orderChanged: true, version: 0 });
       orderRef.current = [];
       return;
     }
@@ -247,7 +295,13 @@ export function useYjsElements(doc: Y.Doc | null): BoardElement[] {
         }
       }
       orderRef.current = order;
-      setElements(next);
+      prevCountRef.current = next.length;
+      setSnapshot((prev) => ({
+        elements: next,
+        changedIds: new Set(order),
+        orderChanged: true,
+        version: prev.version + 1,
+      }));
     };
 
     const LOCAL_INTERACTIVE_ORIGINS = new Set([
@@ -270,6 +324,7 @@ export function useYjsElements(doc: Y.Doc | null): BoardElement[] {
 
       const nextOrder = orderMayHaveChanged ? buildOrder() : orderRef.current;
       if (nextOrder.length === 0) {
+        const previousIds = new Set(orderRef.current);
         orderRef.current = nextOrder;
         // Hint Yjs GC after mass deletion to free tombstone memory
         if (prevCountRef.current > 0 && doc) {
@@ -277,11 +332,17 @@ export function useYjsElements(doc: Y.Doc | null): BoardElement[] {
           doc.transact(() => {}, "gc-hint");
         }
         prevCountRef.current = 0;
-        setElements([]);
+        setSnapshot((prev) => ({
+          elements: [],
+          changedIds: previousIds,
+          orderChanged: true,
+          version: prev.version + 1,
+        }));
         return;
       }
 
-      setElements((prev) => {
+      setSnapshot((prevSnapshot) => {
+        const prev = prevSnapshot.elements;
         const byId = new Map(prev.map((element) => [element.id, element]));
         let anyChanged = false;
 
@@ -297,15 +358,20 @@ export function useYjsElements(doc: Y.Doc | null): BoardElement[] {
 
           const nextElement = yMapToElement(id, value as Y.Map<unknown>);
           if (nextElement) {
-            byId.set(id, nextElement);
-            anyChanged = true;
+            const existing = byId.get(id);
+            if (existing && elementsEqual(existing, nextElement)) {
+              byId.set(id, existing);
+            } else {
+              byId.set(id, nextElement);
+              anyChanged = true;
+            }
           } else if (byId.has(id)) {
             byId.delete(id);
             anyChanged = true;
           }
         }
 
-        if (!anyChanged && !orderMayHaveChanged) return prev;
+        if (!anyChanged && !orderMayHaveChanged) return prevSnapshot;
 
         const nextElements = nextOrder
           .map((id) => byId.get(id))
@@ -317,12 +383,17 @@ export function useYjsElements(doc: Y.Doc | null): BoardElement[] {
           for (let i = 0; i < nextElements.length; i++) {
             if (nextElements[i] !== prev[i]) { same = false; break; }
           }
-          if (same) return prev;
+          if (same) return prevSnapshot;
         }
 
         orderRef.current = nextOrder;
         prevCountRef.current = nextElements.length;
-        return nextElements;
+        return {
+          elements: nextElements,
+          changedIds: new Set(changedIds),
+          orderChanged: orderMayHaveChanged,
+          version: prevSnapshot.version + 1,
+        };
       });
     };
 
@@ -365,5 +436,5 @@ export function useYjsElements(doc: Y.Doc | null): BoardElement[] {
     };
   }, [doc]);
 
-  return elements;
+  return snapshot;
 }

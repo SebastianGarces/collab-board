@@ -218,7 +218,6 @@ export default function CanvasPage() {
   const pendingGroupDragMoveRef = useRef<{ dx: number; dy: number } | null>(null);
   const groupDragOriginsRef = useRef<Map<string, { x: number; y: number }> | null>(null);
   const groupDragConnectorOriginsRef = useRef<Map<string, { fromX: number; fromY: number; toX: number; toY: number }> | null>(null);
-  const groupDragNeedsOriginsRef = useRef(false);
   const pendingResizeRef = useRef<{ id: string; box: ElementBox } | null>(null);
   const pendingRotateRef = useRef<{ id: string; rotation: number } | null>(null);
   const pendingLiveEditTextRef = useRef<string | null>(null);
@@ -233,6 +232,7 @@ export default function CanvasPage() {
   const konvaStageRef = useRef<Konva.Stage | null>(null);
   const [isDrawing, setIsDrawing] = useState(false);
   const [aiChatOpen, setAiChatOpen] = useState(false);
+  const [showDebug, setShowDebug] = useState(false);
   const [presentationPanelOpen, setPresentationPanelOpen] = useState(false);
   const [presentationMode, setPresentationMode] = useState(false);
   const [currentSlide, setCurrentSlide] = useState(0);
@@ -402,7 +402,11 @@ export default function CanvasPage() {
     }
   }, [presentationMode, activePresenter, isFollowing]);
 
-  const rawElements = useYjsElements(yjsDoc);
+  const {
+    elements: rawElements,
+    changedIds: yjsChangedIds,
+    orderChanged: yjsOrderChanged,
+  } = useYjsElements(yjsDoc);
 
   const elements = useMemo(() => {
     return rawElements.map((el) => {
@@ -434,8 +438,22 @@ export default function CanvasPage() {
         maxY: el.y + el.height,
       };
     };
-    spatialIndexRef.current.sync(elements, getAABB);
-  }, [elements]);
+    const index = spatialIndexRef.current;
+    index.setGetAABB(getAABB);
+    if (yjsOrderChanged || index.size === 0 || yjsChangedIds.size === 0) {
+      index.sync(elements, getAABB);
+      return;
+    }
+
+    for (const id of yjsChangedIds) {
+      const next = elementsById.get(id);
+      if (!next) {
+        index.remove(id);
+        continue;
+      }
+      index.update(next);
+    }
+  }, [elements, yjsChangedIds, yjsOrderChanged]);
 
   useEffect(() => {
     if (!perfEnabled) return;
@@ -975,6 +993,7 @@ export default function CanvasPage() {
         elementMap.set("x", x);
         elementMap.set("y", y);
         elementMap.set("frameId", targetFrameId);
+
       }, "local");
     }
 
@@ -1055,6 +1074,7 @@ export default function CanvasPage() {
           }
         }
       }
+
     }, "local");
 
     groupDragOriginsRef.current = null;
@@ -1093,7 +1113,56 @@ export default function CanvasPage() {
   );
 
   const onGroupDragStart = useCallback(() => {
-    groupDragNeedsOriginsRef.current = true;
+    const doc = docRef.current;
+    const store = useCanvasStore.getState();
+    const gd = store.groupDrag;
+    if (!doc || !gd) return;
+
+    const ids = new Set<string>();
+    for (const id of store.selectedElementIds) ids.add(id);
+    for (const id of gd.childIds) ids.add(id);
+
+    const eMap = doc.getMap("elements");
+    const origins = new Map<string, { x: number; y: number }>();
+    const connOrigins = new Map<string, { fromX: number; fromY: number; toX: number; toY: number }>();
+    for (const id of ids) {
+      const elMap = eMap.get(id) as Y.Map<unknown> | undefined;
+      if (!elMap) continue;
+      origins.set(id, {
+        x: (elMap.get("x") as number) ?? 0,
+        y: (elMap.get("y") as number) ?? 0,
+      });
+      if (elMap.get("type") === "connector") {
+        connOrigins.set(id, {
+          fromX: (elMap.get("fromX") as number) ?? 0,
+          fromY: (elMap.get("fromY") as number) ?? 0,
+          toX: (elMap.get("toX") as number) ?? 0,
+          toY: (elMap.get("toY") as number) ?? 0,
+        });
+      }
+    }
+    // Also discover connectors whose endpoints are both in the moving set
+    eMap.forEach((val, key) => {
+      if (ids.has(key)) return;
+      const m = val as Y.Map<unknown>;
+      if (!m || m.get("type") !== "connector") return;
+      const fromId = (m.get("fromId") as string) ?? "";
+      const toId = (m.get("toId") as string) ?? "";
+      if (fromId && toId && ids.has(fromId) && ids.has(toId)) {
+        origins.set(key, {
+          x: (m.get("x") as number) ?? 0,
+          y: (m.get("y") as number) ?? 0,
+        });
+        connOrigins.set(key, {
+          fromX: (m.get("fromX") as number) ?? 0,
+          fromY: (m.get("fromY") as number) ?? 0,
+          toX: (m.get("toX") as number) ?? 0,
+          toY: (m.get("toY") as number) ?? 0,
+        });
+      }
+    });
+    groupDragOriginsRef.current = origins;
+    groupDragConnectorOriginsRef.current = connOrigins.size > 0 ? connOrigins : null;
   }, []);
 
   const flushPendingGroupDragMove = useCallback(() => {
@@ -1102,38 +1171,6 @@ export default function CanvasPage() {
     const pending = pendingGroupDragMoveRef.current;
     if (!pending) return;
     pendingGroupDragMoveRef.current = null;
-
-    if (groupDragNeedsOriginsRef.current) {
-      groupDragNeedsOriginsRef.current = false;
-      const store = useCanvasStore.getState();
-      const gd = store.groupDrag;
-      if (gd) {
-        const ids = new Set<string>();
-        for (const id of store.selectedElementIds) ids.add(id);
-        for (const id of gd.childIds) ids.add(id);
-        const eMap = doc.getMap("elements");
-        const origins = new Map<string, { x: number; y: number }>();
-        const connOrigins = new Map<string, { fromX: number; fromY: number; toX: number; toY: number }>();
-        for (const id of ids) {
-          const elMap = eMap.get(id) as Y.Map<unknown> | undefined;
-          if (!elMap) continue;
-          origins.set(id, {
-            x: (elMap.get("x") as number) ?? 0,
-            y: (elMap.get("y") as number) ?? 0,
-          });
-          if (elMap.get("type") === "connector") {
-            connOrigins.set(id, {
-              fromX: (elMap.get("fromX") as number) ?? 0,
-              fromY: (elMap.get("fromY") as number) ?? 0,
-              toX: (elMap.get("toX") as number) ?? 0,
-              toY: (elMap.get("toY") as number) ?? 0,
-            });
-          }
-        }
-        groupDragOriginsRef.current = origins;
-        groupDragConnectorOriginsRef.current = connOrigins.size > 0 ? connOrigins : null;
-      }
-    }
 
     const origins = groupDragOriginsRef.current;
     if (!origins || origins.size === 0) return;
@@ -1379,11 +1416,19 @@ export default function CanvasPage() {
     }, "local");
   }, []);
 
-  const sendAiMessage = useCallback((prompt: string, conversationHistory?: import("@collab/shared/collab").AiConversationMessage[], selectedElementIds?: string[]): string => {
-    const connection = connectionRef.current;
-    if (!connection) return "";
-    return connection.sendAiMessage(prompt, conversationHistory, selectedElementIds);
-  }, []);
+  const sendAiMessage = useCallback(
+    (
+      prompt: string,
+      conversationHistory?: import("@collab/shared/collab").AiConversationMessage[],
+      selectedElementIds?: string[],
+      imageDataUrl?: string
+    ): string => {
+      const connection = connectionRef.current;
+      if (!connection) return "";
+      return connection.sendAiMessage(prompt, conversationHistory, selectedElementIds, imageDataUrl);
+    },
+    []
+  );
 
   const deleteSelectedElements = useCallback(() => {
     const doc = docRef.current;
@@ -2084,6 +2129,14 @@ export default function CanvasPage() {
   useHotkey("Shift+2", () => zoomToSelection(), { enabled: !editingElementId });
 
   // Stable callback wrappers for BoardCanvas props (avoid inline arrow functions)
+  const handleAiChatToggle = useCallback(() => setAiChatOpen((prev) => !prev), []);
+  const handlePresentationToggle = useCallback(() => setPresentationPanelOpen((prev) => !prev), []);
+
+  const slideOrderForBadgesStable = useMemo(
+    () => (presentationPanelOpen && !presentationMode ? slideOrderForBadges : undefined),
+    [presentationPanelOpen, presentationMode, slideOrderForBadges]
+  );
+
   const handleDragElementStart = useCallback(() => {
     setIsDraggingElement(true);
   }, []);
@@ -2687,14 +2740,14 @@ export default function CanvasPage() {
         spatialIndex={spatialIndexRef.current}
         isSpacebarPressedRef={isSpacebarPressedRef}
         isSpacebarPressed={isSpacebarPressed}
-        slideOrderForBadges={presentationPanelOpen && !presentationMode ? slideOrderForBadges : undefined}
+        slideOrderForBadges={slideOrderForBadgesStable}
       />
 
       {/* Remote cursor overlay */}
       <RemoteCursorOverlay remoteCursors={remoteCursors} camera={camera} />
 
       {/* Selection toolbar - floating above selected element */}
-      {!presentationMode && selectedElement && (!editingElementId || editingConnectorLabel) && !isDraggingElement && (
+      {!presentationMode && selectedElement && (!editingElementId || editingConnectorLabel) && !isDraggingElement && !isPanning && (
         <SelectionToolbar
           element={selectedElement}
           onPropertyChange={handleSelectedElementPropertyChange}
@@ -2868,9 +2921,9 @@ export default function CanvasPage() {
         onDuplicate={duplicateSelectedElements}
         hasSelection={selectedElementIds.size > 0}
         aiChatOpen={aiChatOpen}
-        onAiChatToggle={() => setAiChatOpen((prev) => !prev)}
+        onAiChatToggle={handleAiChatToggle}
         presentationOpen={presentationPanelOpen}
-        onPresentationToggle={() => setPresentationPanelOpen((prev) => !prev)}
+        onPresentationToggle={handlePresentationToggle}
       />
       )}
 
@@ -2884,7 +2937,7 @@ export default function CanvasPage() {
       )}
 
       {/* Debug metrics overlay (dev only) */}
-      {process.env.NODE_ENV === "development" && (
+      {process.env.NODE_ENV === "development" && showDebug && (
         <DebugMetrics
           camera={camera}
           elements={elements}
@@ -2900,80 +2953,87 @@ export default function CanvasPage() {
   );
 
   return (
-    <main className="min-h-screen grid grid-rows-[auto_1fr_auto]">
+    <main className="h-screen w-screen overflow-hidden relative bg-[#121212]">
+      {/* Top-left floating overlay: navigation + board info */}
       {!presentationMode && (
-      <header className="px-4 py-2.5 border-b border-[#2a2a2a] bg-[#1a1a1a] flex justify-between items-center gap-4">
-        <div className="flex items-center gap-3">
-          <Link
-            href="/dashboard"
-            className="flex items-center gap-1.5 text-[#60a5fa] hover:text-[#93bbfc] text-sm transition-colors"
-          >
-            <ArrowLeft className="size-4" />
-            Boards
-          </Link>
-          <span className="text-[#555]">|</span>
-          <strong className="text-sm">{boardName || roomId}</strong>
-          {connectionState === "reconnecting" ? (
-            <span className="text-[#fbbf24] text-xs">reconnecting...</span>
-          ) : connectionState === "disconnected" ? (
-            <span className="text-[#ff9da0] text-xs">disconnected</span>
-          ) : null}
-        </div>
-        <div className="flex items-center gap-2">
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-8 gap-1.5"
-                onClick={async () => {
-                  await navigator.clipboard.writeText(typeof window !== "undefined" ? window.location.href : "");
-                  setShareCopied(true);
-                  setTimeout(() => setShareCopied(false), 2000);
-                }}
-              >
-                {shareCopied ? (
-                  <Check className="h-4 w-4 text-green-500 animate-in fade-in zoom-in duration-200 shrink-0" />
-                ) : (
-                  <Share2 className="h-4 w-4 shrink-0" />
-                )}
-                {shareCopied ? "Copied!" : "Share"}
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom" sideOffset={4}>
-              {shareCopied ? "Copied!" : "Copy share link"}
-            </TooltipContent>
-          </Tooltip>
-          <div className="flex">
-            {onlineUsers.map((user, index) => (
-              <Tooltip key={user.id}>
-                <TooltipTrigger asChild>
-                  <Avatar
-                    size="sm"
-                    className="border-2 border-[#1a1a1a] cursor-default"
-                    style={{ zIndex: onlineUsers.length - index }}
-                  >
-                    <AvatarFallback
-                      className="text-[10px] font-medium text-white"
-                      style={{ backgroundColor: user.color }}
-                    >
-                      {user.name.charAt(0).toUpperCase()}
-                    </AvatarFallback>
-                  </Avatar>
-                </TooltipTrigger>
-                <TooltipContent side="bottom" sideOffset={4}>
-                  {user.name}
-                </TooltipContent>
-              </Tooltip>
-            ))}
+        <div className="absolute top-3 left-3 z-30 pointer-events-none">
+          <div className="pointer-events-auto flex items-center gap-3 h-9 px-3 bg-[#1a1a1a] border border-[#2a2a2a] rounded-lg shadow-lg">
+            <Link
+              href="/dashboard"
+              className="flex items-center gap-1.5 text-[#60a5fa] hover:text-[#93bbfc] text-sm transition-colors cursor-pointer"
+            >
+              <ArrowLeft className="size-4" />
+              Boards
+            </Link>
+            <span className="text-[#555]">|</span>
+            <strong className="text-sm">{boardName || roomId}</strong>
+            {connectionState === "reconnecting" ? (
+              <span className="text-[#fbbf24] text-xs">reconnecting...</span>
+            ) : connectionState === "disconnected" ? (
+              <span className="text-[#ff9da0] text-xs">disconnected</span>
+            ) : null}
           </div>
         </div>
-      </header>
+      )}
+
+      {/* Top-right floating overlay: share + presence avatars */}
+      {!presentationMode && (
+        <div className="absolute top-3 right-3 z-30 pointer-events-none">
+          <div className="pointer-events-auto flex items-center gap-2 h-9 px-3 bg-[#1a1a1a] border border-[#2a2a2a] rounded-lg shadow-lg">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-8 gap-1.5 cursor-pointer"
+                  onClick={async () => {
+                    await navigator.clipboard.writeText(typeof window !== "undefined" ? window.location.href : "");
+                    setShareCopied(true);
+                    setTimeout(() => setShareCopied(false), 2000);
+                  }}
+                >
+                  {shareCopied ? (
+                    <Check className="h-4 w-4 text-green-500 animate-in fade-in zoom-in duration-200 shrink-0" />
+                  ) : (
+                    <Share2 className="h-4 w-4 shrink-0" />
+                  )}
+                  {shareCopied ? "Copied!" : "Share"}
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom" sideOffset={4}>
+                {shareCopied ? "Copied!" : "Copy share link"}
+              </TooltipContent>
+            </Tooltip>
+            <div className="flex">
+              {onlineUsers.map((user, index) => (
+                <Tooltip key={user.id}>
+                  <TooltipTrigger asChild>
+                    <Avatar
+                      size="sm"
+                      className="border-2 border-[#1a1a1a] cursor-default"
+                      style={{ zIndex: onlineUsers.length - index }}
+                    >
+                      <AvatarFallback
+                        className="text-[10px] font-medium text-white"
+                        style={{ backgroundColor: user.color }}
+                      >
+                        {user.name.charAt(0).toUpperCase()}
+                      </AvatarFallback>
+                    </Avatar>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom" sideOffset={4}>
+                    {user.name}
+                  </TooltipContent>
+                </Tooltip>
+              ))}
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Banner when someone else is presenting - visible without opening the panel */}
       {!presentationMode && activePresenter && (
-        <div className="absolute top-14 left-1/2 -translate-x-1/2 z-40 flex items-center gap-3 px-4 py-2 rounded-lg bg-[#2a2a2a] border border-[#3a3a3a] shadow-lg">
+        <div className="absolute top-3 left-1/2 -translate-x-1/2 z-40 flex items-center gap-3 px-4 py-2 rounded-lg bg-[#2a2a2a] border border-[#3a3a3a] shadow-lg">
           <span className="text-sm text-[#e0e0e0]">
             {activePresenter.userName} is presenting
           </span>
@@ -3013,7 +3073,7 @@ export default function CanvasPage() {
       ) : (
         <section
           ref={surfaceRef}
-          className="relative overflow-hidden bg-[#121212] touch-none"
+          className="absolute inset-0 overflow-hidden bg-[#121212] touch-none"
           style={{
             cursor: rotationCursor
               ? "none"
@@ -3032,83 +3092,105 @@ export default function CanvasPage() {
         </section>
       )}
 
+      {/* Bottom-left floating overlay: zoom/pan hint */}
       {!presentationMode && (
-      <footer className="px-4 py-2.5 border-t border-[#2a2a2a] bg-[#1a1a1a] text-[#999] text-sm flex items-center justify-between gap-4">
-        <span className="text-[#666]">Scroll to zoom · <Kbd>Space</Kbd> or <Kbd>H</Kbd> to pan</span>
-        <Dialog>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <DialogTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="text-[#999] hover:text-white hover:bg-[#2a2a2a]"
+        <div className="absolute bottom-3 left-3 z-30 pointer-events-none">
+          <div className="pointer-events-auto flex items-center gap-2 h-9 px-3 bg-[#1a1a1a] border border-[#2a2a2a] rounded-lg shadow-lg text-[#666] text-sm">
+            Scroll to zoom · <Kbd>Space</Kbd> or <Kbd>H</Kbd> to pan
+            {process.env.NODE_ENV === "development" && (
+              <>
+                <span className="text-[#333]">·</span>
+                <button
+                  onClick={() => setShowDebug((v) => !v)}
+                  className={`cursor-pointer text-xs transition-colors ${showDebug ? "text-[#3b82f6]" : "text-[#555] hover:text-[#999]"}`}
                 >
-                  <Keyboard className="size-4" />
-                  Shortcuts
-                </Button>
-              </DialogTrigger>
-            </TooltipTrigger>
-            <TooltipContent side="top">View keyboard shortcuts</TooltipContent>
-          </Tooltip>
-          <DialogContent className="sm:max-w-md bg-[#1a1a1a] border-[#2a2a2a]">
-            <DialogHeader>
-              <DialogTitle>Keyboard Shortcuts</DialogTitle>
-            </DialogHeader>
-            <div className="grid gap-3 py-2">
-              <ShortcutRow keys={<Kbd>V</Kbd>} desc="Select tool" />
-              <ShortcutRow keys={<Kbd>H</Kbd>} desc="Pan mode" />
-              <ShortcutRow keys={<Kbd>S</Kbd>} desc="Add sticky note" />
-              <ShortcutRow keys={<Kbd>R</Kbd>} desc="Add rectangle" />
-              <ShortcutRow keys={<Kbd>C</Kbd>} desc="Add circle" />
-              <ShortcutRow keys={<Kbd>L</Kbd>} desc="Add line" />
-              <ShortcutRow keys={<Kbd>T</Kbd>} desc="Add text" />
-              <ShortcutRow keys={<Kbd>F</Kbd>} desc="Add frame" />
-              <ShortcutRow keys={<Kbd>X</Kbd>} desc="Add connector" />
-              <ShortcutRow keys={<Kbd>Space</Kbd>} desc="Pan canvas" />
-              <ShortcutRow keys={<Kbd>Scroll</Kbd>} desc="Zoom in or out" />
-              <ShortcutRow
-                keys={
-                  <KbdGroup>
-                    <Kbd>{modKey}</Kbd>
-                    <Kbd>C</Kbd>
-                  </KbdGroup>
-                }
-                desc="Copy selection"
-              />
-              <ShortcutRow
-                keys={
-                  <KbdGroup>
-                    <Kbd>{modKey}</Kbd>
-                    <Kbd>V</Kbd>
-                  </KbdGroup>
-                }
-                desc="Paste"
-              />
-              <ShortcutRow
-                keys={
-                  <KbdGroup>
-                    <Kbd>{modKey}</Kbd>
-                    <Kbd>D</Kbd>
-                  </KbdGroup>
-                }
-                desc="Duplicate selection"
-              />
-              <ShortcutRow keys={<Kbd>Del</Kbd>} desc="Delete selection" />
-              <ShortcutRow keys={<Kbd>esc</Kbd>} desc="Deselect or reset" />
-              <ShortcutRow
-                keys={
-                  <KbdGroup>
-                    <Kbd>⇧</Kbd>
-                    <Kbd>2</Kbd>
-                  </KbdGroup>
-                }
-                desc="Zoom to selection"
-              />
-            </div>
-          </DialogContent>
-        </Dialog>
-      </footer>
+                  debug
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Bottom-right floating overlay: shortcuts button + dialog */}
+      {!presentationMode && (
+        <div className="absolute bottom-3 right-3 z-30 pointer-events-none">
+          <div className="pointer-events-auto">
+            <Dialog>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <DialogTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-9 px-3 bg-[#1a1a1a] border border-[#2a2a2a] rounded-lg shadow-lg text-[#999] hover:text-white hover:bg-[#2a2a2a] cursor-pointer"
+                    >
+                      <Keyboard className="size-4" />
+                      Shortcuts
+                    </Button>
+                  </DialogTrigger>
+                </TooltipTrigger>
+                <TooltipContent side="top">View keyboard shortcuts</TooltipContent>
+              </Tooltip>
+              <DialogContent className="sm:max-w-md bg-[#1a1a1a] border-[#2a2a2a]">
+                <DialogHeader>
+                  <DialogTitle>Keyboard Shortcuts</DialogTitle>
+                </DialogHeader>
+                <div className="grid gap-3 py-2">
+                  <ShortcutRow keys={<Kbd>V</Kbd>} desc="Select tool" />
+                  <ShortcutRow keys={<Kbd>H</Kbd>} desc="Pan mode" />
+                  <ShortcutRow keys={<Kbd>S</Kbd>} desc="Add sticky note" />
+                  <ShortcutRow keys={<Kbd>R</Kbd>} desc="Add rectangle" />
+                  <ShortcutRow keys={<Kbd>C</Kbd>} desc="Add circle" />
+                  <ShortcutRow keys={<Kbd>L</Kbd>} desc="Add line" />
+                  <ShortcutRow keys={<Kbd>T</Kbd>} desc="Add text" />
+                  <ShortcutRow keys={<Kbd>F</Kbd>} desc="Add frame" />
+                  <ShortcutRow keys={<Kbd>X</Kbd>} desc="Add connector" />
+                  <ShortcutRow keys={<Kbd>Space</Kbd>} desc="Pan canvas" />
+                  <ShortcutRow keys={<Kbd>Scroll</Kbd>} desc="Zoom in or out" />
+                  <ShortcutRow
+                    keys={
+                      <KbdGroup>
+                        <Kbd>{modKey}</Kbd>
+                        <Kbd>C</Kbd>
+                      </KbdGroup>
+                    }
+                    desc="Copy selection"
+                  />
+                  <ShortcutRow
+                    keys={
+                      <KbdGroup>
+                        <Kbd>{modKey}</Kbd>
+                        <Kbd>V</Kbd>
+                      </KbdGroup>
+                    }
+                    desc="Paste"
+                  />
+                  <ShortcutRow
+                    keys={
+                      <KbdGroup>
+                        <Kbd>{modKey}</Kbd>
+                        <Kbd>D</Kbd>
+                      </KbdGroup>
+                    }
+                    desc="Duplicate selection"
+                  />
+                  <ShortcutRow keys={<Kbd>Del</Kbd>} desc="Delete selection" />
+                  <ShortcutRow keys={<Kbd>esc</Kbd>} desc="Deselect or reset" />
+                  <ShortcutRow
+                    keys={
+                      <KbdGroup>
+                        <Kbd>⇧</Kbd>
+                        <Kbd>2</Kbd>
+                      </KbdGroup>
+                    }
+                    desc="Zoom to selection"
+                  />
+                </div>
+              </DialogContent>
+            </Dialog>
+          </div>
+        </div>
       )}
     </main>
   );

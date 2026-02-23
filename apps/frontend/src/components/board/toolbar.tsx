@@ -40,7 +40,7 @@ function ToolbarComponent({ onUndo, onRedo, canUndo, canRedo, onDelete, onDuplic
   const setActiveTool = useCanvasStore((s) => s.setActiveTool);
 
   return (
-      <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1 bg-[#1a1a1a] border border-[#2a2a2a] rounded-xl px-2 py-1.5 shadow-lg">
+      <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1 bg-[#1a1a1a] border border-[#2a2a2a] rounded-xl px-2 py-1.5 shadow-lg">
         <Tooltip>
           <TooltipTrigger asChild>
             <Button

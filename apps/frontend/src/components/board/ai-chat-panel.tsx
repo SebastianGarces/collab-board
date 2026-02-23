@@ -1,6 +1,6 @@
 "use client";
 
-import { Loader2, Send, Sparkles, X } from "lucide-react";
+import { ImagePlus, Loader2, Send, Sparkles, X } from "lucide-react";
 import {
     forwardRef,
     memo,
@@ -14,6 +14,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useCanvasStore } from "@/stores/canvas-store";
+import { resizeImageToDataUrl } from "@/lib/image-utils";
 import type { AiChatResponse, AiConversationMessage, AiToolCallSummary } from "@collab/shared/collab";
 
 type ChatMessage = {
@@ -23,12 +24,18 @@ type ChatMessage = {
   toolCallSummary?: AiToolCallSummary[];
   error?: string;
   pending?: boolean;
+  imageDataUrl?: string;
 };
 
 type AiChatPanelProps = {
   open: boolean;
   onClose: () => void;
-  onSendMessage: (prompt: string, conversationHistory?: AiConversationMessage[], selectedElementIds?: string[]) => string;
+  onSendMessage: (
+    prompt: string,
+    conversationHistory?: AiConversationMessage[],
+    selectedElementIds?: string[],
+    imageDataUrl?: string
+  ) => string;
 };
 
 const TOOL_LABELS: Record<string, string> = {
@@ -45,6 +52,10 @@ const TOOL_LABELS: Record<string, string> = {
   batchModifyElements: "Modified",
   layoutElements: "Arranged",
   resizeFrameToFitContent: "Resized to fit",
+  createQuadrant: "Created quadrant",
+  createColumnLayout: "Created columns",
+  createDiagram: "Created diagram",
+  bulkCreateElements: "Created",
 };
 
 function formatToolSummary(summary: AiToolCallSummary): string {
@@ -70,10 +81,22 @@ const AiChatPanelInner = forwardRef<
 >(function AiChatPanelInner({ open, onClose, onSendMessage }, ref) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
+  const [attachedImage, setAttachedImage] = useState<{ dataUrl: string; fileName: string } | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [isDragOver, setIsDragOver] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  const selectedElementIds = useCanvasStore((s) => s.selectedElementIds);
+  const selectedElementCount = useCanvasStore((s) => s.selectedElementIds.size);
   const pendingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const attachImage = useCallback(async (file: File) => {
+    try {
+      const dataUrl = await resizeImageToDataUrl(file);
+      setAttachedImage({ dataUrl, fileName: file.name });
+    } catch (err) {
+      console.error("[ai-chat] Image attach failed:", err);
+    }
+  }, []);
 
   const scrollToBottom = useCallback(() => {
     requestAnimationFrame(() => {
@@ -90,50 +113,68 @@ const AiChatPanelInner = forwardRef<
     }
   }, []);
 
-  const handleSend = useCallback((overridePrompt?: string) => {
-    const prompt = (overridePrompt ?? input).trim();
-    if (!prompt) return;
+  const handleSend = useCallback(
+    (overridePrompt?: string) => {
+      const prompt = (overridePrompt ?? input).trim();
+      const hasImage = attachedImage !== null;
+      if (!prompt && !hasImage) return;
 
-    const history: AiConversationMessage[] = messages
-      .filter((m) => !m.pending && m.text)
-      .map((m) => {
-        let content = m.text;
-        if (m.role === "assistant" && m.toolCallSummary?.length) {
-          const actions = m.toolCallSummary.map(formatToolSummary).join(", ");
-          content = `${content} [Actions: ${actions}]`;
-        }
-        return { role: m.role, content };
-      })
-      .slice(-10);
+      const finalPrompt = prompt || "Recreate the content from this image on the board";
 
-    const selectionIds = selectedElementIds.size > 0 ? Array.from(selectedElementIds) : undefined;
-    const messageId = onSendMessage(prompt, history.length > 0 ? history : undefined, selectionIds);
-    if (!messageId) return;
+      const history: AiConversationMessage[] = messages
+        .filter((m) => !m.pending && m.text)
+        .map((m) => {
+          let content = m.text;
+          if (m.role === "assistant" && m.toolCallSummary?.length) {
+            const actions = m.toolCallSummary.map(formatToolSummary).join(", ");
+            content = `${content} [Actions: ${actions}]`;
+          }
+          return { role: m.role, content };
+        })
+        .slice(-10);
 
-    const responseId = `${messageId}-response`;
-    setMessages((prev) => [
-      ...prev,
-      { id: messageId, role: "user", text: prompt },
-      { id: responseId, role: "assistant", text: "", pending: true },
-    ]);
-    if (!overridePrompt) {
-      setInput("");
-      if (inputRef.current) inputRef.current.style.height = "auto";
-    }
-    scrollToBottom();
-
-    clearPendingTimeout();
-    pendingTimeoutRef.current = setTimeout(() => {
-      pendingTimeoutRef.current = null;
-      setMessages((prev) =>
-        prev.map((msg) =>
-          msg.id === responseId && msg.pending
-            ? { ...msg, pending: false, error: "Request timed out — please try again." }
-            : msg
-        )
+      const selectedElementIds = useCanvasStore.getState().selectedElementIds;
+      const selectionIds = selectedElementIds.size > 0 ? Array.from(selectedElementIds) : undefined;
+      const messageId = onSendMessage(
+        finalPrompt,
+        history.length > 0 ? history : undefined,
+        selectionIds,
+        hasImage ? attachedImage.dataUrl : undefined
       );
-    }, AI_RESPONSE_TIMEOUT_MS);
-  }, [input, messages, onSendMessage, scrollToBottom, selectedElementIds, clearPendingTimeout]);
+      if (!messageId) return;
+
+      const responseId = `${messageId}-response`;
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: messageId,
+          role: "user",
+          text: finalPrompt,
+          imageDataUrl: hasImage ? attachedImage.dataUrl : undefined,
+        },
+        { id: responseId, role: "assistant", text: "", pending: true },
+      ]);
+      if (!overridePrompt) {
+        setInput("");
+        if (inputRef.current) inputRef.current.style.height = "auto";
+      }
+      setAttachedImage(null);
+      scrollToBottom();
+
+      clearPendingTimeout();
+      pendingTimeoutRef.current = setTimeout(() => {
+        pendingTimeoutRef.current = null;
+        setMessages((prev) =>
+          prev.map((msg) =>
+            msg.id === responseId && msg.pending
+              ? { ...msg, pending: false, error: "Request timed out — please try again." }
+              : msg
+          )
+        );
+      }, AI_RESPONSE_TIMEOUT_MS);
+    },
+    [input, messages, onSendMessage, scrollToBottom, clearPendingTimeout, attachedImage]
+  );
 
   const handleAiResponse = useCallback(
     (response: AiChatResponse) => {
@@ -172,7 +213,33 @@ const AiChatPanelInner = forwardRef<
   if (!open) return null;
 
   return (
-    <div className="absolute top-4 right-4 bottom-20 z-40 w-[380px] flex flex-col bg-[#1a1a1a] border border-[#2a2a2a] rounded-xl shadow-2xl overflow-hidden" onWheel={(e) => e.stopPropagation()}>
+    <div
+      className={`absolute top-16 right-3 bottom-16 z-40 w-[380px] flex flex-col bg-[#1a1a1a] border rounded-xl shadow-2xl overflow-hidden ${
+        isDragOver ? "border-blue-500/50 bg-blue-500/5" : "border-[#2a2a2a]"
+      }`}
+      onWheel={(e) => e.stopPropagation()}
+      onDragOver={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (e.dataTransfer.types.includes("Files")) {
+          setIsDragOver(true);
+        }
+      }}
+      onDragLeave={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setIsDragOver(false);
+      }}
+      onDrop={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setIsDragOver(false);
+        const file = e.dataTransfer.files[0];
+        if (file && file.type.startsWith("image/")) {
+          attachImage(file);
+        }
+      }}
+    >
       <div className="flex items-center justify-between px-4 py-3 border-b border-[#2a2a2a]">
         <div className="flex items-center gap-2">
           <Sparkles className="h-4 w-4 text-[#888]" />
@@ -208,12 +275,25 @@ const AiChatPanelInner = forwardRef<
                 {msg.pending ? (
                   <div className="flex items-center gap-2 text-[#888]">
                     <Loader2 className="h-3 w-3 animate-spin" />
-                    <span>Thinking...</span>
+                    <span>
+                      {messages.find((m) => m.id === msg.id.replace("-response", ""))?.imageDataUrl
+                        ? "Analyzing image..."
+                        : "Thinking..."}
+                    </span>
                   </div>
                 ) : msg.error ? (
                   <span className="text-red-400">{msg.error}</span>
                 ) : (
-                  msg.text
+                  <>
+                    {msg.text}
+                    {msg.role === "user" && msg.imageDataUrl && (
+                      <img
+                        src={msg.imageDataUrl}
+                        alt="Attached"
+                        className="rounded-md max-h-32 max-w-full mt-1"
+                      />
+                    )}
+                  </>
                 )}
               </div>
               {msg.toolCallSummary && msg.toolCallSummary.length > 0 && (
@@ -252,11 +332,29 @@ const AiChatPanelInner = forwardRef<
             ))}
           </div>
         )}
-        {selectedElementIds.size > 0 && (
+        {selectedElementCount > 0 && (
           <div className="flex items-center gap-1.5 mb-2 px-0.5">
             <Badge variant="secondary" className="text-[10px] bg-[#2a2a2a] text-[#aaa] border border-[#333]">
-              {selectedElementIds.size} {selectedElementIds.size === 1 ? "element" : "elements"} selected
+              {selectedElementCount} {selectedElementCount === 1 ? "element" : "elements"} selected
             </Badge>
+          </div>
+        )}
+        {attachedImage && (
+          <div className="flex items-center gap-2 mb-2 px-0.5">
+            <img
+              src={attachedImage.dataUrl}
+              alt="Preview"
+              className="h-12 w-12 rounded-md object-cover border border-[#333]"
+            />
+            <span className="text-xs text-[#999] truncate flex-1">{attachedImage.fileName}</span>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6 shrink-0 cursor-pointer"
+              onClick={() => setAttachedImage(null)}
+            >
+              <X className="h-3 w-3" />
+            </Button>
           </div>
         )}
         <div className="flex items-end gap-2">
@@ -276,15 +374,47 @@ const AiChatPanelInner = forwardRef<
                 handleSend();
               }
             }}
+            onPaste={(e) => {
+              const items = e.clipboardData?.items;
+              if (!items) return;
+              for (const item of items) {
+                if (item.type.startsWith("image/")) {
+                  e.preventDefault();
+                  const file = item.getAsFile();
+                  if (file) attachImage(file);
+                  return;
+                }
+              }
+            }}
             placeholder="Ask the AI to do something..."
             className="flex-1 resize-none overflow-hidden bg-[#222] border border-[#333] rounded-lg px-3 py-2 text-sm text-white placeholder-[#666] outline-none focus:border-[#444] focus:ring-1 focus:ring-[#444]"
           />
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/png,image/jpeg,image/webp,image/gif"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) attachImage(file);
+              e.target.value = "";
+            }}
+          />
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-9 w-9 shrink-0 cursor-pointer"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={attachedImage !== null}
+          >
+            <ImagePlus className="h-4 w-4" />
+          </Button>
           <Button
             variant="secondary"
             size="icon"
-            className="h-9 w-9 shrink-0"
+            className="h-9 w-9 shrink-0 cursor-pointer"
             onClick={() => handleSend()}
-            disabled={!input.trim()}
+            disabled={!input.trim() && !attachedImage}
           >
             <Send className="h-4 w-4" />
           </Button>

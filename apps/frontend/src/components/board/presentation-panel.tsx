@@ -218,7 +218,7 @@ export function PresentationPanel({
 
   return (
     <div
-      className="absolute left-4 top-4 bottom-20 z-40 w-[320px] flex flex-col bg-[#1a1a1a] border border-[#2a2a2a] rounded-xl shadow-2xl overflow-hidden"
+      className="absolute left-3 top-16 bottom-16 z-40 w-[320px] flex flex-col bg-[#1a1a1a] border border-[#2a2a2a] rounded-xl shadow-2xl overflow-hidden"
       onWheel={(e) => e.stopPropagation()}
     >
       <div className="flex items-center justify-between px-4 py-3 border-b border-[#2a2a2a]">

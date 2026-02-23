@@ -40,7 +40,7 @@ export async function handleAiMessage(
     return;
   }
 
-  if (request.type !== "ai_request" || !request.prompt) {
+  if (request.type !== "ai_request" || (!request.prompt && !request.imageDataUrl)) {
     const errorResponse: AiChatResponse = {
       type: "ai_response",
       id: request.id ?? "unknown",
@@ -52,15 +52,42 @@ export async function handleAiMessage(
     return;
   }
 
+  // Validate image if present
+  if (request.imageDataUrl) {
+    if (!request.imageDataUrl.startsWith("data:image/")) {
+      const errorResponse: AiChatResponse = {
+        type: "ai_response",
+        id: request.id,
+        text: "",
+        toolCallSummary: [],
+        error: "Invalid image format — expected a data:image/* URL",
+      };
+      socket.send(encodeAiResponse(errorResponse));
+      return;
+    }
+    if (request.imageDataUrl.length > 2 * 1024 * 1024) {
+      const errorResponse: AiChatResponse = {
+        type: "ai_response",
+        id: request.id,
+        text: "",
+        toolCallSummary: [],
+        error: "Image too large — please use a smaller image",
+      };
+      socket.send(encodeAiResponse(errorResponse));
+      return;
+    }
+  }
+
   // Pause Yjs broadcasting so multi-step mutations arrive as one atomic
   // update when the agent finishes, avoiding visual jitter on the canvas.
   roomManager?.pauseBroadcast(roomId);
 
   try {
     const result = await handleAiCommand({
-      prompt: request.prompt,
+      prompt: request.prompt || "Recreate the content from this image on the board",
       conversationHistory: request.conversationHistory,
       selectedElementIds: request.selectedElementIds,
+      imageDataUrl: request.imageDataUrl,
       doc,
       userId,
       roomId,

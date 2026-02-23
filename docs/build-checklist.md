@@ -1,6 +1,6 @@
 # CollabBoard Build Checklist
 
-**Last updated**: February 21, 2026
+**Last updated**: February 22, 2026
 
 This checklist tracks what has been implemented against the full spec in `collab-board.md`, informed by the architecture decisions in `pre-search.md`. Items are organized by dependency layer so you can work top-to-bottom without getting blocked.
 
@@ -111,13 +111,13 @@ Layer 4 (final — depends on everything above) ✓ ALL DONE
 
 | # | Metric | Target | Status | Notes |
 |---|--------|--------|--------|-------|
-| 1 | Frame rate during pan/zoom | 60 FPS | [x] Infra done | FPS monitoring in perf-probe, budget in perf checks, and viewport culling for non-selected offscreen elements |
+| 1 | Frame rate during pan/zoom | 60 FPS | [x] Infra done | FPS monitoring in perf-probe, budget in perf checks, viewport culling, and RAF-batched Canvas2D renderer snapshot sync with batched live drag overrides |
 | 2 | Object sync latency | <100ms | [x] Infra done | WS benchmark measures p50/p95/p99; high-frequency drag/resize/rotate writes are RAF-batched on frontend |
 | 3 | Cursor sync latency | <50ms | [x] Infra done | Perf probe round-trip measurement |
 | 4 | Object capacity (500+ objects) | 500+ | [x] Infra done | WS benchmark creates 500 objects |
 | 5 | Concurrent users | 5+ | [x] Infra done | 5 seeded perf users, Playwright multi-session test |
 | 6 | Input to render latency | p95 <= 16.7ms | [x] Infra done | `inputToRenderMs` now enforced in frontend perf budget checks |
-| 7 | Long frame budget | <=120/min | [x] Infra done | `canvasLongFramesPerMinute` now enforced in `perf-check.ts` and frontend perf spec |
+| 7 | Long frame budget | <=120/min | [x] Infra done | `canvasLongFramesPerMinute` enforced in `perf-check.ts` and frontend perf spec; 2026-02-22 canvas architecture pass removed the persistent soft-budget warning in local perf CI |
 
 ---
 
@@ -143,6 +143,7 @@ Layer 4 (final — depends on everything above) ✓ ALL DONE
 | 16 | Response latency < 2s for single-step | [~] Partial | p95 3268ms exceeds 2000ms budget because complex template commands (SWOT, diagrams, column layouts) are optimized into single atomic tool calls. Simple single-object commands (create, move, recolor) complete in 1-2s within budget. See `docs/ai-development-log.md` for full analysis. |
 | 17 | Conversation context (multi-turn) | [x] Done | History passed via WS, capped at 10 messages, system prompt supports follow-ups |
 | 18 | AI perf testing (LangSmith traces) | [x] Done | `bun run ai:perf-check` validates latency p95/p99 against budgets |
+| 19 | AI Vision: image-to-board recreation | [x] Done | Upload/paste/drop image, vision model recreates on canvas |
 
 ---
 

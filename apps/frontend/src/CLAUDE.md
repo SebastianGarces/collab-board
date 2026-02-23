@@ -1,0 +1,75 @@
+# Frontend Canvas Rules
+
+Applies to: `app/canvas/**`, `components/canvas/**`, `lib/collab.ts`, `hooks/use-yjs-elements.ts`
+
+## Architecture
+
+- Canvas rendering uses Konva.js via `react-konva`.
+- Overlay UI (toolbars, panels, dialogs) uses shadcn/ui positioned absolutely over the Konva canvas.
+- During canvas interaction, overlay is `pointer-events-none`.
+- State flows from Yjs -> React -> Konva (one-way).
+
+## Element Component Pattern
+
+- **Content components** are presentational: receive an `element` prop, return Konva primitives, no interaction logic.
+  - One file per element type: `sticky-note.tsx`, `rectangle-element.tsx`, `circle-element.tsx`, `line-element.tsx`, `text-element.tsx`.
+- **`InteractiveShape`** wraps content components to add drag, resize, selection, and double-click behavior.
+- **Handle components** (`ShapeResizeHandles`, `LineEndpointHandles`) render zoom-aware interaction handles.
+- New element types follow this pattern: create a content component, then render it inside `InteractiveShape`.
+
+## Yjs State Observation
+
+- Elements are stored in `doc.getMap("elements")` where each value is a `Y.Map<unknown>`.
+- The `useYjsElements` hook observes the map with `observeDeep()` and converts to typed `BoardElement[]`.
+- Conversion uses `yMapToElement()` with safe fallbacks: `toFiniteNumber()`, `toSafeSize()` (minimum size enforcement).
+- Never read element state from anywhere other than the Yjs document.
+
+## Yjs Mutations
+
+- Always wrap mutations in `doc.transact(() => { ... })` for atomic updates.
+- Create elements by creating a new `Y.Map`, setting properties, then adding to the elements map.
+- Move/resize by updating `x`, `y`, `width`, `height` inside a transaction.
+- Delete by calling `elementsMap.delete(id)`.
+
+## Camera System
+
+- Camera state: `{ x, y, scale }` in screen pixels.
+- World-to-screen transform: `screenX = worldX * scale + offsetX`.
+- Zoom clamps: `MIN_SCALE = 0.2`, `MAX_SCALE = 3`.
+- Zoom keeps the world point under the cursor fixed.
+- Pan via spacebar + drag or middle mouse button.
+
+## Konva Rendering
+
+- Use `listening={false}` on non-interactive Konva shapes for performance.
+- Separate Konva layers for different concerns (background, objects, selection, cursors).
+- Resize handles and selection outlines scale inversely with zoom to maintain visual size.
+
+## Collab Client (`collab.ts`)
+
+- `createCollabConnection()` creates a Y.Doc, connects via WebSocket, and returns `{ doc, disconnect, setCursor, sendPerfProbe }`.
+- Binary ArrayBuffer messages over WebSocket using `lib0` encoding.
+- Local updates sent via `doc.on("update")` handler.
+- Reconnect with exponential backoff (1s-30s) in `collab.ts`. See `docs/memory/known-issues.md` for resolved items.
+
+## Performance
+
+- Run `bun run perf:frontend:ci` after changes to canvas or collab client code.
+- FPS target: 60fps during pan/zoom.
+- Performance metrics exposed via `window.__collabPerf` for Playwright tests.
+- Synthetic object injection available via `syntheticObjectCount` for stress testing.
+
+## Text Editing
+
+- Overlay textarea positioned absolutely, transformed by camera scale.
+- Textarea styling matches element type (sticky note background color vs. transparent for text elements).
+- Commits on blur or Escape key.
+
+## Reference Skills
+
+When working in this area, read these skill files for framework best practices:
+- `.agents/skills/next-best-practices/SKILL.md`
+- `.agents/skills/vercel-react-best-practices/SKILL.md`
+- `.agents/skills/vercel-composition-patterns/SKILL.md`
+- `.agents/skills/zustand-state-management/SKILL.md`
+- `.agents/skills/frontend-design/SKILL.md`

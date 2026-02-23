@@ -37,6 +37,10 @@ export class SpatialIndex {
     return this.getAABB(el);
   }
 
+  setGetAABB(getAABB?: GetAABB) {
+    this.getAABB = getAABB ?? elementAABB;
+  }
+
   private getCells(aabb: AABB): number[] {
     const cs = this.cellSize;
     const minCX = Math.floor(aabb.minX / cs);
@@ -178,7 +182,7 @@ export class SpatialIndex {
    * Returns true if the index was changed.
    */
   sync(elements: BoardElement[], getAABB?: GetAABB): boolean {
-    this.getAABB = getAABB ?? elementAABB;
+    this.setGetAABB(getAABB);
     const newIds = new Set<string>();
     let changed = false;
 

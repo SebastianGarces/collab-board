@@ -267,7 +267,8 @@ export function createCollabConnection(args: {
   const sendAiMessage = (
     prompt: string,
     conversationHistory?: AiConversationMessage[],
-    selectedElementIds?: string[]
+    selectedElementIds?: string[],
+    imageDataUrl?: string
   ): string => {
     const id = crypto.randomUUID();
     const request: AiChatRequest = {
@@ -276,6 +277,7 @@ export function createCollabConnection(args: {
       prompt,
       conversationHistory,
       selectedElementIds: selectedElementIds?.length ? selectedElementIds : undefined,
+      imageDataUrl,
     };
     const encoder = encoding.createEncoder();
     encoding.writeVarUint(encoder, WS_MESSAGE_AI);

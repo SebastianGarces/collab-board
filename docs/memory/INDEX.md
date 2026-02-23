@@ -1,6 +1,6 @@
 # Memory Index
 
-Last updated: 2026-02-21
+Last updated: 2026-02-22
 
 Read this first before looking for specific memories. If it's not listed here, it's not stored.
 
@@ -20,11 +20,11 @@ Read this first before looking for specific memories. If it's not listed here, i
 
 ## Decisions
 
-- `docs/memory/decisions.md` — Architecture Decision Records (ADR-001 through ADR-017). Covers CRDT choice, rendering, auth, deployment, AI flow, data layer, UI framework, Zustand for canvas state, WS message buffering, connector architecture, frontend throttled update strategy, AI agent SDK/tracing choices, AI latency optimizations, and bulkCreateElements template tool for large batch creation. (2026-02-19)
+- `docs/memory/decisions.md` — Architecture Decision Records (ADR-001 through ADR-020). Adds canvas performance boundary split: RAF-batched renderer snapshots, batched live drag overrides, incremental Yjs change metadata, and targeted spatial-index updates. (2026-02-22)
 
 ## Known Issues
 
-- `docs/memory/known-issues.md` — Active issues: Yjs memory growth risk, persistence race condition, canvasLongFramesPerMinute soft budget. Resolved: WS auth, reconnect resilience, XSS sanitization, board loading race conditions. (2026-02-18)
+- `docs/memory/known-issues.md` — Active issues: Yjs memory growth risk, persistence race condition. Resolved: WS auth, reconnect resilience, XSS sanitization, board loading race conditions, canvasLongFramesPerMinute soft budget regression. (2026-02-22)
 
 ## Research Findings
 

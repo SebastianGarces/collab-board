@@ -18,6 +18,7 @@ export type AiChatRequest = {
   prompt: string;
   conversationHistory?: AiConversationMessage[];
   selectedElementIds?: string[];
+  imageDataUrl?: string;
 };
 
 export type AiToolCallSummary = {

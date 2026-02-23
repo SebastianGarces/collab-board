@@ -174,3 +174,21 @@ Append-only log. Never edit past entries. If a decision is superseded, add a new
 **Context:** Need presentation mode that turns frames into an ordered slide deck with smooth camera animation and collaborative following (one user presents, others follow).
 **Decision:** Store slide order in `doc.getArray("slideOrder")` (Y.Array of frame IDs). Extend presence payload with optional `presenting: { slideIndex, slideOrder }`. Presenter broadcasts via presence; followers auto-sync to presenter's slide. Camera animation uses `applyCameraDirect` during animation (60fps), `setCameraState` only at end. Panel on left, overlay fullscreen with prev/next/exit.
 **Consequences:** No schema change. Frame deletion must clean up slideOrder. Presence payload grows slightly when presenting. Backend forwards presence as-is.
+
+---
+
+### ADR-019: AI Vision — image-to-board via WebSocket base64
+**Date:** 2026-02-21
+**Status:** accepted
+**Context:** Users want to upload/paste/drop photos of whiteboards, diagrams, or sketches and have the AI recreate them on the canvas.
+**Decision:** Image flows through existing WebSocket AI pipeline as base64 data URL in `AiChatRequest.imageDataUrl`. No HTTP upload endpoint. Client resizes to max 1024px before encoding. Backend builds multimodal `HumanMessage` (text + image_url) for LangChain. Vision model (GPT-4o or Gemini) analyzes image and calls existing tools. Single-phase: image + tools in same agent turn.
+**Consequences:** Payload ~200–500KB for 1024px PNG. Handler validates data URL format and 2MB encoded limit. Vision prompt addendum instructs model to map image content to compound tools (createDiagram, createColumnLayout, createQuadrant, batchCreateElements).
+
+---
+
+### ADR-020: Canvas performance boundary split (React vs renderer vs Yjs)
+**Date:** 2026-02-22
+**Status:** accepted
+**Context:** The Canvas2D wrapper refactor introduced frame drops and broad rerenders during drag/pan/select because transient interaction state, renderer sync, and Yjs observation updates were tightly coupled.
+**Decision:** Keep interaction and renderer updates mostly imperative per frame: batch `BoardCanvas -> renderer.setState` once per RAF, batch live drag overrides in one renderer call, keep high-frequency drag deltas out of Zustand writes, and expose incremental Yjs metadata (`changedIds`, `orderChanged`) so consumers can apply targeted updates (e.g. spatial index update/remove instead of full sync).
+**Consequences:** React commit pressure during interaction is reduced, renderer hot-path allocations drop (no per-element override map merge), and Yjs-driven consumers can avoid O(n) rebuild work when only a subset of elements changes.

@@ -1,0 +1,56 @@
+# Backend Collaboration Rules
+
+## Architecture
+
+- Each room has a single `Y.Doc` instance held in memory by `RoomManager`.
+- Rooms are lazy-created on first client connection and disposed when the last client disconnects.
+- The `RoomManager` is a singleton -- one instance per server process.
+
+## Yjs Patterns
+
+- Board elements live in `doc.getMap("elements")` where each value is a `Y.Map<unknown>`.
+- Presence lives in `doc.getMap("presence")` -- this is transient data, never persisted.
+- Always use `Y.encodeStateAsUpdate(doc)` for persistence, never raw JSON serialization.
+- When loading persisted state, clear the presence map (it's stale).
+
+## WebSocket Protocol
+
+- Binary protocol using `lib0` encoding/decoding.
+- Message format: `[messageType: varuint][payload...]`.
+- Message types are defined in `@collab/shared/collab`: `WS_MESSAGE_SYNC = 0`, `WS_MESSAGE_PERF_PROBE = 1`.
+- Use `y-protocols/sync` for sync messages (step 1, step 2, update).
+- Broadcast updates to all clients in the room except the originator.
+
+## Room Lifecycle
+
+1. First client connects -> room created, Y.Doc instantiated, DB state loaded async.
+2. Messages received before load completes are queued in `pendingMessages`.
+3. After load: pending messages flushed, sync step 1 sent to all clients.
+4. Periodic saves every 30 seconds via `setInterval`.
+5. Last client disconnects -> final save, timer cleared, Y.Doc destroyed, room removed.
+
+## Persistence
+
+- Adapter pattern: implement `loadState(roomId)` and `saveState(roomId, doc)`.
+- Yjs binary state is base64-encoded for PostgreSQL TEXT column storage.
+- Save triggers: 30-second interval + final save on room disposal.
+- No explicit locking -- see `docs/memory/known-issues.md` for race condition note.
+
+## Performance
+
+- Run `bun run perf:ws:ci` after any changes to this directory.
+- Processing duration is tracked in buckets (<=1ms through >50ms).
+- Metrics are logged every 30 seconds and available via `/api/collab/debug`.
+- Budgets defined in `docs/performance-budgets.json`: p95 cursor sync <50ms, p95 object sync <100ms.
+
+## Auth
+
+- WebSocket auth is currently a known gap (see `docs/memory/known-issues.md`).
+- When implementing: validate session token in the `open` handler, not via middleware.
+- Immutable rule: no unauthenticated access. Fix is tracked in `docs/build-checklist.md`.
+
+## Reference Skills
+
+When working in this area, read these skill files for framework best practices:
+- `.agents/skills/elysiajs/SKILL.md`
+- `.agents/skills/bun-development/SKILL.md`

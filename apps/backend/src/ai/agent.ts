@@ -1,3 +1,4 @@
+
 import {
   AIMessage,
   HumanMessage,
@@ -46,7 +47,23 @@ RULES:
 15. QUADRANT / MATRIX DIAGRAMS: use createQuadrant. ALWAYS pass items with placeholder labels per quadrant (e.g. for SWOT: items: {topLeft:["Strength 1","Strength 2"],topRight:["Weakness 1","Weakness 2"],bottomLeft:["Opportunity 1","Opportunity 2"],bottomRight:["Threat 1","Threat 2"]}). Also pass quadrantLabels for section titles. Stickies are created server-side in one call — no follow-up needed.
 16. STRUCTURED DIAGRAMS: For timelines or any diagram needing structural elements (axis lines, dividers, labels) alongside content, use batchCreateElements with mixed types — lines for dividers/axes, text for labels, sticky-notes for content — all in one call. Use line elements for visual structure.
 17. CONNECTED DIAGRAMS: For flowcharts, org charts, trees, mind maps, ER diagrams, process flows, state machines, or any diagram where nodes are connected by arrows, use createDiagram. Define nodes (label, optional color) and edges (from/to by 0-based node index). ALWAYS add edge labels to describe the relationship or action between nodes (e.g. "sends request", "triggers", "has many") — unlabeled edges make diagrams hard to read. Default to direction TB (top-to-bottom) — it reads better with curved connectors and labels. Only use LR when the user explicitly asks for horizontal/left-to-right. The server auto-layouts and creates all connectors. Do NOT manually create shapes + createConnector for connected diagrams.
-18. COLUMN LAYOUTS: For user journey maps, retrospectives, kanban boards, or any column-based template, use createColumnLayout. ALWAYS include placeholder items so columns are not empty. Example journey map: columns: [{heading:"Awareness",items:["Touchpoint 1","Touchpoint 2","Touchpoint 3"]},{heading:"Consideration",items:["Touchpoint 1","Touchpoint 2","Touchpoint 3"]},...]. Retro: columns: [{heading:"What Went Well",items:["Item 1","Item 2","Item 3"]},{heading:"What Didn't",items:["Item 1","Item 2","Item 3"]},{heading:"Action Items",items:["Item 1","Item 2","Item 3"]}]. Server handles all positioning. Do NOT use batchCreateElements for these — createColumnLayout ensures correct layout.`;
+18. COLUMN LAYOUTS: For user journey maps, retrospectives, kanban boards, or any column-based template, use createColumnLayout. ALWAYS include placeholder items so columns are not empty. Example journey map: columns: [{heading:"Awareness",items:["Touchpoint 1","Touchpoint 2","Touchpoint 3"]},{heading:"Consideration",items:["Touchpoint 1","Touchpoint 2","Touchpoint 3"]},...]. Retro: columns: [{heading:"What Went Well",items:["Item 1","Item 2","Item 3"]},{heading:"What Didn't",items:["Item 1","Item 2","Item 3"]},{heading:"Action Items",items:["Item 1","Item 2","Item 3"]}]. Server handles all positioning. Do NOT use batchCreateElements for these — createColumnLayout ensures correct layout.
+`;
+
+const VISION_PROMPT_ADDENDUM = `
+
+VISION TASK: The user attached an image. Analyze it and recreate its content on the board using your tools.
+- Identify all visual elements: sticky notes, shapes, text, arrows/connectors, frames/groups, labels.
+- Preserve the spatial layout — map the image's relative positions to canvas coordinates starting from the SUGGESTED ORIGIN.
+- Match colors as closely as possible using the available palettes listed above.
+- Read and reproduce ALL visible text content accurately.
+- For connected diagrams (flowcharts, org charts, trees, mind maps, state machines), use createDiagram with descriptive edge labels.
+- For column-based layouts (kanban, retrospectives, journey maps), use createColumnLayout.
+- For 2x2 quadrant layouts (SWOT, Eisenhower matrix, priority grids), use createQuadrant.
+- For general mixed content, use batchCreateElements with frames to group related items.
+- If the image shows a template or structured layout, pick the most appropriate compound tool rather than creating elements one by one.
+- If you cannot identify something clearly, make your best guess rather than skipping it.
+- The user's text prompt may provide additional instructions — follow them (e.g., "recreate this but add a marketing column").`;
 
 export type AgentResult = {
   text: string;
@@ -99,7 +116,12 @@ function promptLikelyNeedsOccupiedRegion(prompt: string): boolean {
 
 const traceMessageAssembly = traceable(
   async (
-    input: { prompt: string; conversationHistory?: AiConversationMessage[]; selectedElementIds?: string[] },
+    input: {
+      prompt: string;
+      conversationHistory?: AiConversationMessage[];
+      selectedElementIds?: string[];
+      imageDataUrl?: string;
+    },
     elementsMap: Y.Map<unknown>,
   ): Promise<BaseMessage[]> => {
     const history = (input.conversationHistory ?? []).slice(-MAX_HISTORY_MESSAGES);
@@ -107,12 +129,16 @@ const traceMessageAssembly = traceable(
     const userContent = hasSelection
       ? `${buildSelectionContext(input.selectedElementIds!)}\n\n${input.prompt}`
       : input.prompt;
-    const occupiedRegion = promptLikelyNeedsOccupiedRegion(input.prompt)
-      ? computeOccupiedRegion(elementsMap)
-      : null;
-    const systemPrompt = occupiedRegion
+    const occupiedRegion =
+      input.imageDataUrl || promptLikelyNeedsOccupiedRegion(input.prompt)
+        ? computeOccupiedRegion(elementsMap)
+        : null;
+    let systemPrompt = occupiedRegion
       ? `${SYSTEM_PROMPT}\n\n${occupiedRegion}`
       : SYSTEM_PROMPT;
+    if (input.imageDataUrl) {
+      systemPrompt += VISION_PROMPT_ADDENDUM;
+    }
     const historyMessages: BaseMessage[] = [];
     for (const m of history) {
       if (m.role === "user") {
@@ -121,10 +147,21 @@ const traceMessageAssembly = traceable(
         historyMessages.push(new AIMessage({ content: m.content }));
       }
     }
+    const userMessage = input.imageDataUrl
+      ? new HumanMessage({
+          content: [
+            { type: "text" as const, text: userContent },
+            {
+              type: "image_url" as const,
+              image_url: { url: input.imageDataUrl },
+            },
+          ],
+        })
+      : new HumanMessage(userContent);
     return [
       new SystemMessage(systemPrompt),
       ...historyMessages,
-      new HumanMessage(userContent),
+      userMessage,
     ];
   },
   { name: "ai-message-assembly" }
@@ -151,16 +188,17 @@ export const handleAiCommand = traceable(
     prompt: string;
     conversationHistory?: AiConversationMessage[];
     selectedElementIds?: string[];
+    imageDataUrl?: string;
     doc: Y.Doc;
     userId: string;
     roomId: string;
   }): Promise<AgentResult> => {
-    const { prompt, conversationHistory, selectedElementIds, doc, userId, roomId } = args;
+    const { prompt, conversationHistory, selectedElementIds, imageDataUrl, doc, userId, roomId } = args;
 
     const elementsMap = doc.getMap("elements");
 
     return runAgentLoop(
-      { prompt, conversationHistory, selectedElementIds },
+      { prompt, conversationHistory, selectedElementIds, imageDataUrl },
       doc,
       elementsMap,
     );
@@ -173,7 +211,12 @@ export const handleAiCommand = traceable(
 );
 
 async function runAgentLoop(
-  input: { prompt: string; conversationHistory?: AiConversationMessage[]; selectedElementIds?: string[] },
+  input: {
+    prompt: string;
+    conversationHistory?: AiConversationMessage[];
+    selectedElementIds?: string[];
+    imageDataUrl?: string;
+  },
   doc: Y.Doc,
   elementsMap: Y.Map<unknown>,
 ): Promise<AgentResult> {
@@ -181,6 +224,7 @@ async function runAgentLoop(
   const { tools, aiCreatedIds } = createBoardTools(doc, { useGeminiSchema: isGemini });
   const toolMap = Object.fromEntries(tools.map((t) => [t.name, t]));
 
+  const openaiModel = input.imageDataUrl ? "gpt-4o" : "gpt-5.1";
   const model = isGemini
     ? new ChatGoogle({
         model: "gemini-2.0-flash",
@@ -188,7 +232,7 @@ async function runAgentLoop(
         temperature: 0,
       }).bindTools(tools)
     : new ChatOpenAI({
-        model: "gpt-5.1",
+        model: openaiModel,
         temperature: 0,
       }).bindTools(tools, { parallel_tool_calls: false });
 
