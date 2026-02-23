@@ -5,6 +5,7 @@ import { Eye, EyeClosed, Presentation, Trash2, Type } from "lucide-react";
 import type { BoardElement, ConnectorElement, ElementType, FrameElement } from "@collab/shared/collab";
 import { STICKY_NOTE_COLORS, SHAPE_COLORS, FRAME_COLORS, FRAME_BORDER_COLORS } from "@collab/shared/collab";
 import { Separator } from "@/components/ui/separator";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ColorPicker } from "./color-picker";
 import { FontFamilyPicker } from "./font-family-picker";
 import { FontSizePicker } from "./font-size-picker";
@@ -299,14 +300,18 @@ function SelectionToolbarComponent({
           {onDissolveFrame && (
             <>
               <Separator orientation="vertical" className="h-6 bg-[#2a2a2a] mx-0.5" />
-              <button
-                type="button"
-                onClick={() => onDissolveFrame(frame.id)}
-                className="flex items-center justify-center h-7 w-7 rounded-md text-[#999] hover:text-red-400 hover:bg-[#2a2a2a] transition-colors cursor-pointer"
-                title="Delete frame only (keep contents)"
-              >
-                <Trash2 className="h-4 w-4" />
-              </button>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    onClick={() => onDissolveFrame(frame.id)}
+                    className="flex items-center justify-center h-7 w-7 rounded-md text-[#999] hover:text-red-400 hover:bg-[#2a2a2a] transition-colors cursor-pointer"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="top">Delete frame only (keep content)</TooltipContent>
+              </Tooltip>
             </>
           )}
         </div>
