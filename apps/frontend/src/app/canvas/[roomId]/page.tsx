@@ -3124,21 +3124,16 @@ export default function CanvasPage() {
         <div className="absolute bottom-3 right-3 z-30 pointer-events-none">
           <div className="pointer-events-auto">
             <Dialog>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <DialogTrigger asChild>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-9 px-3 bg-[#1a1a1a] border border-[#2a2a2a] rounded-lg shadow-lg text-[#999] hover:text-white hover:bg-[#2a2a2a] cursor-pointer"
-                    >
-                      <Keyboard className="size-4" />
-                      Shortcuts
-                    </Button>
-                  </DialogTrigger>
-                </TooltipTrigger>
-                <TooltipContent side="top">View keyboard shortcuts</TooltipContent>
-              </Tooltip>
+              <DialogTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-9 px-3 bg-[#1a1a1a] border border-[#2a2a2a] rounded-lg shadow-lg text-[#999] hover:text-white hover:bg-[#2a2a2a] cursor-pointer"
+                >
+                  <Keyboard className="size-4" />
+                  Shortcuts
+                </Button>
+              </DialogTrigger>
               <DialogContent className="sm:max-w-md bg-[#1a1a1a] border-[#2a2a2a]">
                 <DialogHeader>
                   <DialogTitle>Keyboard Shortcuts</DialogTitle>
