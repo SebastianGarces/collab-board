@@ -232,6 +232,7 @@ export default function CanvasPage() {
   const konvaStageRef = useRef<Konva.Stage | null>(null);
   const [isDrawing, setIsDrawing] = useState(false);
   const [aiChatOpen, setAiChatOpen] = useState(false);
+  const [aiPanelFocused, setAiPanelFocused] = useState(false);
   const [showDebug, setShowDebug] = useState(false);
   const [presentationPanelOpen, setPresentationPanelOpen] = useState(false);
   const [presentationMode, setPresentationMode] = useState(false);
@@ -2092,15 +2093,15 @@ export default function CanvasPage() {
     if (useCanvasStore.getState().selectedElementIds.size > 0) {
       copySelectedElements();
     }
-  }, { ignoreInputs: true, enabled: !aiChatOpen });
+  }, { ignoreInputs: true, enabled: !aiPanelFocused });
   useHotkey("Mod+V", () => {
     pasteElements();
-  }, { ignoreInputs: true, enabled: !aiChatOpen });
+  }, { ignoreInputs: true, enabled: !aiPanelFocused });
   useHotkey("Mod+D", () => {
     if (useCanvasStore.getState().selectedElementIds.size > 0) {
       duplicateSelectedElements();
     }
-  }, { ignoreInputs: true, enabled: !aiChatOpen });
+  }, { ignoreInputs: true, enabled: !aiPanelFocused });
   useHotkey("Mod+Z", () => undo(), { enabled: !editingElementId });
   useHotkey("Mod+Shift+Z", () => redo(), { enabled: !editingElementId });
 
@@ -2127,6 +2128,11 @@ export default function CanvasPage() {
   }, { enabled: !editingElementId });
 
   useHotkey("Shift+2", () => zoomToSelection(), { enabled: !editingElementId });
+
+  // Reset panel focus state when AI chat closes
+  useEffect(() => {
+    if (!aiChatOpen) setAiPanelFocused(false);
+  }, [aiChatOpen]);
 
   // Stable callback wrappers for BoardCanvas props (avoid inline arrow functions)
   const handleAiChatToggle = useCallback(() => setAiChatOpen((prev) => !prev), []);
@@ -2878,6 +2884,7 @@ export default function CanvasPage() {
         open={aiChatOpen}
         onClose={() => setAiChatOpen(false)}
         onSendMessage={sendAiMessage}
+        onPanelFocusChange={setAiPanelFocused}
         ref={aiChatHandlerRef}
       />
       )}

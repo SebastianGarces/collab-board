@@ -36,6 +36,7 @@ type AiChatPanelProps = {
     selectedElementIds?: string[],
     imageDataUrl?: string
   ) => string;
+  onPanelFocusChange?: (focused: boolean) => void;
 };
 
 const TOOL_LABELS: Record<string, string> = {
@@ -78,7 +79,7 @@ const EXAMPLE_PROMPTS = [
 const AiChatPanelInner = forwardRef<
   ((response: AiChatResponse) => void) | null,
   AiChatPanelProps
->(function AiChatPanelInner({ open, onClose, onSendMessage }, ref) {
+>(function AiChatPanelInner({ open, onClose, onSendMessage, onPanelFocusChange }, ref) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [attachedImage, setAttachedImage] = useState<{ dataUrl: string; fileName: string } | null>(null);
@@ -86,6 +87,7 @@ const AiChatPanelInner = forwardRef<
   const [isDragOver, setIsDragOver] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
   const selectedElementCount = useCanvasStore((s) => s.selectedElementIds.size);
   const pendingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -214,9 +216,16 @@ const AiChatPanelInner = forwardRef<
 
   return (
     <div
+      ref={panelRef}
       className={`absolute top-16 right-3 bottom-16 z-40 w-[380px] flex flex-col bg-[#1a1a1a] border rounded-xl shadow-2xl overflow-hidden ${
         isDragOver ? "border-blue-500/50 bg-blue-500/5" : "border-[#2a2a2a]"
       }`}
+      onFocusCapture={() => onPanelFocusChange?.(true)}
+      onBlurCapture={(e) => {
+        if (!panelRef.current?.contains(e.relatedTarget as Node)) {
+          onPanelFocusChange?.(false);
+        }
+      }}
       onWheel={(e) => e.stopPropagation()}
       onDragOver={(e) => {
         e.preventDefault();
